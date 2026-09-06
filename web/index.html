@@ -1,0 +1,425 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>KAFKA CLONE // NEO-BRUTALIST DASHBOARD & PIPELINE EXPLORER</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Public+Sans:wght@700;800;900&family=Space+Grotesk:wght@500;700&family=JetBrains+Mono:wght@500;700;800&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+    <div class="container">
+        <!-- HEADER / HERO -->
+        <header class="hero-header">
+            <div class="hero-brand">
+                <h1 class="hero-title">KAFKA CLONE<span class="dot">.</span></h1>
+                <p class="hero-subtitle">Append-Only Distributed Message Broker & Storage Engine</p>
+            </div>
+            <div class="cluster-status-card">
+                <div class="status-indicator">
+                    <span class="status-dot pulsing"></span>
+                    <span id="clusterStatusText">BROKER ONLINE</span>
+                </div>
+                <div class="status-metrics">
+                    <div class="metric-item">
+                        <span class="metric-label">TCP PORT</span>
+                        <span class="metric-value" id="statTcpPort">9092</span>
+                    </div>
+                    <div class="metric-item">
+                        <span class="metric-label">WEB PORT</span>
+                        <span class="metric-value" id="statHttpPort">8080</span>
+                    </div>
+                    <div class="metric-item">
+                        <span class="metric-label">TOTAL MSGS</span>
+                        <span class="metric-value yellow-bg" id="statTotalMsgs">0</span>
+                    </div>
+                    <div class="metric-item">
+                        <span class="metric-label">UPTIME</span>
+                        <span class="metric-value" id="statUptime">0s</span>
+                    </div>
+                </div>
+                <button class="btn btn-sm btn-black" id="refreshAllBtn">REFRESH STATE</button>
+            </div>
+        </header>
+
+        <!-- NAVIGATION TABS -->
+        <nav class="main-tabs">
+            <button class="tab-btn active" data-tab="studio">
+                LIVE BROKER STUDIO
+            </button>
+            <button class="tab-btn" data-tab="logviewer">
+                DISK LOG & INDEX INSPECTOR
+            </button>
+            <button class="tab-btn" data-tab="pipeline">
+                ARCHITECTURE & PIPELINE EXPLORER
+            </button>
+            <button class="tab-btn" data-tab="docs">
+                DOCUMENTATION & GUIDES
+            </button>
+        </nav>
+
+        <!-- TAB 1: LIVE BROKER STUDIO -->
+        <section id="tab-studio" class="tab-pane active">
+            <!-- TOPICS ROW -->
+            <div class="panel yellow-panel">
+                <div class="panel-header">
+                    <div class="panel-title">
+                        <span class="pill-badge pill-black">TOPIC REGISTRY</span>
+                        <h2>Active Topics & Partitions</h2>
+                    </div>
+                    <div class="panel-actions">
+                        <button class="btn btn-sm btn-pink" id="openCreateTopicModalBtn">+ NEW TOPIC</button>
+                    </div>
+                </div>
+                <div class="topic-grid" id="topicsContainer">
+                    <div class="empty-state">Loading topics from broker...</div>
+                </div>
+            </div>
+
+            <!-- PRODUCER & CONSUMER DUAL COLUMNS -->
+            <div class="dual-columns">
+                <!-- PRODUCER PANEL -->
+                <div class="panel cyan-panel">
+                    <div class="panel-header">
+                        <div class="panel-title">
+                            <span class="pill-badge pill-black">PRODUCER</span>
+                            <h2>Message Producer Studio</h2>
+                        </div>
+                        <span class="pill-badge pill-white" id="producerTargetBadge">TARGET: orders:0</span>
+                    </div>
+
+                    <form id="produceForm" class="brutalist-form">
+                        <div class="form-row dual">
+                            <div class="form-group">
+                                <label for="prodTopicSelect">TOPIC</label>
+                                <select id="prodTopicSelect" class="form-input"></select>
+                            </div>
+                            <div class="form-group">
+                                <label for="prodPartitionSelect">PARTITION</label>
+                                <select id="prodPartitionSelect" class="form-input">
+                                    <option value="0">Partition 0</option>
+                                    <option value="1">Partition 1</option>
+                                    <option value="2">Partition 2</option>
+                                </select>
+                            </div>
+                        </div>
+
+                        <div class="form-group">
+                            <label for="prodKeyInput">MESSAGE KEY (OPTIONAL - FOR ROUTING)</label>
+                            <input type="text" id="prodKeyInput" class="form-input" placeholder="e.g. user_9942 or order_tx_88">
+                        </div>
+
+                        <div class="form-group">
+                            <div class="label-with-actions">
+                                <label for="prodValueInput">PAYLOAD VALUE (TEXT OR JSON)</label>
+                                <div class="template-chips">
+                                    <button type="button" class="chip" data-tpl="order">Order JSON</button>
+                                    <button type="button" class="chip" data-tpl="user">User Event</button>
+                                    <button type="button" class="chip" data-tpl="payment">Payment</button>
+                                </div>
+                            </div>
+                            <textarea id="prodValueInput" class="form-input code-input" rows="4" placeholder="Type message payload..."></textarea>
+                        </div>
+
+                        <button type="submit" class="btn btn-block btn-yellow" id="produceSubmitBtn">
+                            SEND TO BROKER (O(1) DISK APPEND)
+                        </button>
+                    </form>
+
+                    <!-- PRODUCER RECEIPT -->
+                    <div id="producerReceipt" class="receipt-box hidden">
+                        <div class="receipt-header">
+                            <span class="receipt-title">LAST APPEND RECEIPT</span>
+                            <span class="pill-badge pill-green" id="rcptStatus">SUCCESS</span>
+                        </div>
+                        <div class="receipt-grid">
+                            <div><span class="dim">OFFSET:</span> <strong class="highlight" id="rcptOffset">-</strong></div>
+                            <div><span class="dim">PARTITION:</span> <span id="rcptPart">-</span></div>
+                            <div><span class="dim">CRC32:</span> <span class="mono" id="rcptCrc">-</span></div>
+                            <div><span class="dim">TIMESTAMP:</span> <span class="mono" id="rcptTs">-</span></div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- CONSUMER PANEL -->
+                <div class="panel pink-panel">
+                    <div class="panel-header">
+                        <div class="panel-title">
+                            <span class="pill-badge pill-black">CONSUMER</span>
+                            <h2>Consumer Group Playground</h2>
+                        </div>
+                        <span class="pill-badge pill-white" id="consumerPosBadge">POS: 0</span>
+                    </div>
+
+                    <div class="consumer-controls">
+                        <div class="form-row dual">
+                            <div class="form-group">
+                                <label for="consGroupInput">GROUP ID</label>
+                                <input type="text" id="consGroupInput" class="form-input" value="analytics-workers">
+                            </div>
+                            <div class="form-group">
+                                <label for="consTopicSelect">TOPIC</label>
+                                <select id="consTopicSelect" class="form-input"></select>
+                            </div>
+                        </div>
+
+                        <div class="form-row dual">
+                            <div class="form-group">
+                                <label for="consPartSelect">PARTITION</label>
+                                <select id="consPartSelect" class="form-input">
+                                    <option value="0">Partition 0</option>
+                                    <option value="1">Partition 1</option>
+                                    <option value="2">Partition 2</option>
+                                </select>
+                            </div>
+                            <div class="form-group">
+                                <label for="consSeekInput">SEEK OFFSET</label>
+                                <div class="input-with-btn">
+                                    <input type="number" id="consSeekInput" class="form-input" value="0" min="0">
+                                    <button class="btn btn-sm btn-black" id="consSeekBtn">SEEK</button>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="action-btn-row">
+                            <button class="btn btn-cyan flex-1" id="pollMessagesBtn">POLL (NEXT 10)</button>
+                            <button class="btn btn-lime flex-1" id="commitOffsetBtn">COMMIT OFFSET</button>
+                            <button class="btn btn-white" id="toggleAutoPollBtn">AUTO: OFF</button>
+                        </div>
+                    </div>
+
+                    <!-- CONSUMED RECORDS LIST -->
+                    <div class="feed-container">
+                        <div class="feed-header">
+                            <span>POLL BUFFER (<span id="pollCount">0</span> RECORDS)</span>
+                            <button class="clean-link" id="clearPollBtn">Clear Buffer</button>
+                        </div>
+                        <div id="consumedRecordsList" class="records-stream">
+                            <div class="empty-state">No records polled yet. Click [POLL (NEXT 10)] above.</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- TAB 2: DISK LOG & INDEX INSPECTOR -->
+        <section id="tab-logviewer" class="tab-pane">
+            <div class="panel lime-panel">
+                <div class="panel-header">
+                    <div class="panel-title">
+                        <span class="pill-badge pill-black">STORAGE ENGINE</span>
+                        <h2>On-Disk Commit Log & Offset Index Inspector</h2>
+                    </div>
+                    <div class="inspector-controls">
+                        <select id="inspectTopicSelect" class="form-input form-sm"></select>
+                        <select id="inspectPartSelect" class="form-input form-sm">
+                            <option value="0">Partition 0</option>
+                            <option value="1">Partition 1</option>
+                            <option value="2">Partition 2</option>
+                        </select>
+                        <button class="btn btn-sm btn-black" id="inspectRefreshBtn">INSPECT FILES</button>
+                    </div>
+                </div>
+
+                <!-- STORAGE STATS -->
+                <div class="storage-meta-cards">
+                    <div class="meta-card">
+                        <span class="meta-label">DIRECTORY PATH</span>
+                        <span class="meta-val mono" id="inspectDir">-</span>
+                    </div>
+                    <div class="meta-card">
+                        <span class="meta-label">HIGH WATERMARK</span>
+                        <span class="meta-val highlight" id="inspectHwm">0</span>
+                    </div>
+                    <div class="meta-card">
+                        <span class="meta-label">SEGMENTS ON DISK</span>
+                        <span class="meta-val" id="inspectSegCount">0</span>
+                    </div>
+                    <div class="meta-card">
+                        <span class="meta-label">INDEX LOOKUP COST</span>
+                        <span class="meta-val lime-bg">O(log N) Binary</span>
+                    </div>
+                </div>
+
+                <!-- SEGMENTS TABLE -->
+                <div class="segment-details-box">
+                    <h3>Active & Rolled Log Segments</h3>
+                    <div class="table-responsive">
+                        <table class="brutalist-table">
+                            <thead>
+                                <tr>
+                                    <th>BASE OFFSET</th>
+                                    <th>LOG FILE (.log)</th>
+                                    <th>INDEX FILE (.index)</th>
+                                    <th>FILE SIZE (BYTES)</th>
+                                    <th>INDEXED ENTRIES</th>
+                                    <th>STATUS</th>
+                                </tr>
+                            </thead>
+                            <tbody id="segmentsTableBody">
+                                <tr><td colspan="6" class="text-center">Select partition to load segments.</td></tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+
+                <!-- RAW DISK RECORD DUMP -->
+                <div class="records-dump-box">
+                    <div class="dump-header">
+                        <h3>Sequential Record Walk (Raw Byte Layout Preview)</h3>
+                        <span class="pill-badge pill-yellow">CRC32 VERIFIED</span>
+                    </div>
+                    <div id="diskRecordsList" class="disk-records-grid">
+                        <div class="empty-state">No messages loaded.</div>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- TAB 3: ARCHITECTURE & PIPELINE EXPLORER -->
+        <section id="tab-pipeline" class="tab-pane">
+            <div class="panel cream-panel">
+                <div class="panel-header">
+                    <div class="panel-title">
+                        <span class="pill-badge pill-black">HOW IT WORKS</span>
+                        <h2>End-to-End Pipeline & Code Architecture</h2>
+                    </div>
+                    <div class="pipeline-tab-toggles">
+                        <button class="pill-toggle active" data-flow="produce">1. PRODUCE FLOW</button>
+                        <button class="pill-toggle" data-flow="storage">2. COMMIT LOG & INDEX</button>
+                        <button class="pill-toggle" data-flow="fetch">3. FETCH (CONSUME) FLOW</button>
+                        <button class="pill-toggle" data-flow="commit">4. OFFSET COMMIT FLOW</button>
+                    </div>
+                </div>
+
+                <!-- INTERACTIVE PIPELINE DIAGRAM -->
+                <div class="pipeline-visualizer">
+                    <div id="pipelineDiagram" class="pipeline-nodes-container">
+                        <!-- Populated dynamically based on selected flow -->
+                    </div>
+                </div>
+
+                <!-- DETAILED CODE & EXPLANATION CARD -->
+                <div class="pipeline-detail-card" id="pipelineDetailCard">
+                    <div class="detail-header">
+                        <span class="pill-badge pill-yellow" id="detailStepNum">STEP 1</span>
+                        <h3 id="detailStepTitle">Producer Client Dispatches TCP Request</h3>
+                    </div>
+                    <p id="detailStepDesc" class="detail-description">
+                        The client creates a Message payload, encapsulates it into a ProduceRequest with topic and partition, prefixes it with a 4-byte big-endian frame length, and writes to the TCP socket.
+                    </p>
+                    <div class="code-preview-block">
+                        <div class="code-preview-header">
+                            <span id="detailCodeFile">src/client/Producer.java</span>
+                            <span class="code-lang">JAVA</span>
+                        </div>
+                        <pre><code id="detailCodeContent">// Click any step above to inspect its implementation</code></pre>
+                    </div>
+                </div>
+
+                <!-- ARCHITECTURAL ADVANTAGES -->
+                <div class="architecture-grid">
+                    <div class="arch-card">
+                        <div class="arch-badge">ZERO DISK HEAD SEEK</div>
+                        <h4>Why Append-Only Logs?</h4>
+                        <p>Unlike relational databases that perform random B-Tree page writes, Kafka logs append strictly to the end of the file. Sequential disk I/O on modern storage drives achieves hundreds of megabytes per second, leveraging the operating system page cache without random seek penalties.</p>
+                    </div>
+                    <div class="arch-card">
+                        <div class="arch-badge">BINARY OFFSET INDEX</div>
+                        <h4>Why .index Files?</h4>
+                        <p>Scanning a large log file from byte zero to find an offset is inefficient. The broker writes a fixed 16-byte index entry [8B offset | 8B physical byte position] every message. A binary search immediately finds the exact byte to seek to in O(log N) time.</p>
+                    </div>
+                    <div class="arch-card">
+                        <div class="arch-badge">NON-DESTRUCTIVE READS</div>
+                        <h4>Why Consumer Offsets?</h4>
+                        <p>Traditional queues delete messages as consumers process them. In Kafka, messages are immutable and permanent. Multiple consumer groups can read the same stream independently at their own pace, or rewind (seek) to replay events anytime.</p>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- TAB 4: DOCUMENTATION & GUIDES -->
+        <section id="tab-docs" class="tab-pane">
+            <div class="panel yellow-panel">
+                <div class="panel-header">
+                    <div class="panel-title">
+                        <span class="pill-badge pill-black">DOCS HUB</span>
+                        <h2>Project Documentation & Manual Guides</h2>
+                    </div>
+                    <div class="doc-selector-tabs">
+                        <button class="btn btn-sm btn-yellow active doc-tab-btn" data-doc="readme">README.md</button>
+                        <button class="btn btn-sm btn-white doc-tab-btn" data-doc="testing">MANUAL_TESTING_GUIDE.md</button>
+                        <button class="btn btn-sm btn-white doc-tab-btn" data-doc="architecture">ARCHITECTURE_AND_PIPELINE.md</button>
+                    </div>
+                </div>
+
+                <!-- DOC CARDS OVERVIEW -->
+                <div class="doc-cards-grid">
+                    <div class="doc-summary-card" data-doc="readme">
+                        <div class="doc-card-badge pill-yellow">START HERE</div>
+                        <h3>Project README</h3>
+                        <p>Architecture overview, quickstart instructions, web dashboard usage guide, and component breakdown.</p>
+                        <button class="btn btn-sm btn-black" onclick="switchDoc('readme')">VIEW README</button>
+                    </div>
+                    <div class="doc-summary-card" data-doc="testing">
+                        <div class="doc-card-badge pill-cyan">STEP-BY-STEP</div>
+                        <h3>Manual Testing Guide</h3>
+                        <p>Compilation with javac, execution, REST API commands, custom Java client code, and crash recovery verification.</p>
+                        <button class="btn btn-sm btn-black" onclick="switchDoc('testing')">VIEW TESTING GUIDE</button>
+                    </div>
+                    <div class="doc-summary-card" data-doc="architecture">
+                        <div class="doc-card-badge pill-pink">DEEP DIVE</div>
+                        <h3>Architecture & Pipelines</h3>
+                        <p>Append-only log mechanics, binary index lookups, and sequence diagrams for Produce, Storage, Fetch, and Commit.</p>
+                        <button class="btn btn-sm btn-black" onclick="switchDoc('architecture')">VIEW ARCHITECTURE</button>
+                    </div>
+                </div>
+
+                <!-- MARKDOWN CONTENT VIEWER -->
+                <div class="doc-viewer-container">
+                    <div class="doc-viewer-header">
+                        <div class="doc-title-box">
+                            <span class="pill-badge pill-black" id="activeDocBadge">README.md</span>
+                            <span class="doc-file-path" id="activeDocPath">kafka-clone/README.md</span>
+                        </div>
+                        <button class="btn btn-sm btn-white" id="copyDocBtn">COPY RAW MARKDOWN</button>
+                    </div>
+                    <div id="docContentRendered" class="doc-rendered-body">
+                        Loading document...
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- CREATE TOPIC MODAL -->
+        <div id="createTopicModal" class="modal-overlay hidden">
+            <div class="modal-card">
+                <div class="modal-header">
+                    <h3>CREATE NEW TOPIC</h3>
+                    <button class="close-modal-btn" id="closeModalBtn">&times;</button>
+                </div>
+                <form id="createTopicForm">
+                    <div class="form-group">
+                        <label for="newTopicName">TOPIC NAME</label>
+                        <input type="text" id="newTopicName" class="form-input" placeholder="e.g. payments, clickstream" required>
+                    </div>
+                    <div class="form-group">
+                        <label for="newTopicPartitions">PARTITION COUNT</label>
+                        <input type="number" id="newTopicPartitions" class="form-input" value="3" min="1" max="16">
+                        <small>Messages will be distributed across these partitions.</small>
+                    </div>
+                    <div class="modal-actions">
+                        <button type="button" class="btn btn-white" id="cancelModalBtn">CANCEL</button>
+                        <button type="submit" class="btn btn-yellow">CREATE TOPIC</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+
+    <script src="app.js"></script>
+</body>
+</html>

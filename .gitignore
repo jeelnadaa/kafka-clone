@@ -1,0 +1,21 @@
+# Bytecode and Compiled outputs
+bin/
+*.class
+
+# Storage and Test directories
+kafka_data/
+test_data/
+*.dat
+*.log
+*.index
+
+# IDE and Editor files
+.idea/
+*.iml
+.vscode/
+*.swp
+*.swo
+.DS_Store
+
+# Temporary build scripts / artifacts
+sources.txt
