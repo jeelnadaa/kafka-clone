@@ -72,38 +72,38 @@ const PIPELINES = {
         steps: [
             {
                 num: "STEP 1",
-                title: "1. Partition Routing & Checksum",
-                desc: "The producer chooses which partition should receive the message. If the message has a key (like user_123), it hashes the key so that all messages for that user always go to the exact same partition. If there is no key, it distributes them evenly across partitions using round-robin. It also calculates a 4-byte CRC32 checksum over the payload so the broker can verify that data wasn't corrupted in transit.",
+                title: "1. Pick Partition & Create Message Object",
+                desc: "The Producer chooses the target partition (either by hashing the key like user_123 so the same key always lands in the same partition, or using round-robin). It then creates a Message object holding the key, value, timestamp, and a calculated CRC32 checksum for data integrity.",
                 file: "src/client/Producer.java",
                 code: `// 1. Determine target partition (Key Hash or Round-Robin)
 int partition = (key != null) ? Math.abs(key.hashCode() % pCount) : roundRobinSeq++ % pCount;
 
-// 2. Wrap message and compute CRC32 checksum
+// 2. Create Message object (computes CRC32 checksum)
 Message msg = Message.of(key, value);`
             },
             {
                 num: "STEP 2",
-                title: "2. Binary Frame Packaging & TCP Send",
-                desc: "The producer packs the message into a ProduceRequest containing the topic and partition. It serializes this into a compact binary format, prefixes it with a 4-byte length header so the broker knows exactly how many bytes to read, and sends it directly over a persistent TCP socket to the broker.",
+                title: "2. Create ProduceRequest & Convert to Binary",
+                desc: "The Producer wraps the Message into a ProduceRequest object containing the topic and partition. It then converts this ProduceRequest object into binary bytes using Protocol.encodeProduceRequest(), prefixes it with a 4-byte frame length header, and sends it directly over the TCP socket to the broker.",
                 file: "src/client/Producer.java",
-                code: `// Wrap request with topic, partition, and message list
+                code: `// 1. Wrap in ProduceRequest object
 ProduceRequest req = new ProduceRequest(topic, partition, Collections.singletonList(msg));
-byte[] requestPayload = Protocol.encodeProduceRequest(req);
 
-// Write length-prefixed frame: [4-byte length] + [binary payload]
-Protocol.writeFrame(socketOut, requestPayload);`
+// 2. Convert to binary bytes and send over TCP socket
+byte[] requestPayload = Protocol.encodeProduceRequest(req);
+Protocol.writeFrame(socketOut, requestPayload); // [4-byte length] + [binary payload]`
             },
             {
                 num: "STEP 3",
-                title: "3. Acknowledgment (ACK) Confirmation",
-                desc: "The producer waits for a response from the broker. Once the broker successfully writes the message to disk, it sends back an acknowledgment containing the assigned sequential offset (e.g. #42). The producer now knows the message is safely and permanently stored on disk.",
+                title: "3. Receive Broker Acknowledgment (ACK)",
+                desc: "The Producer waits on the TCP socket for the broker's response. The broker replies with a binary frame which the client decodes into a ProduceResponse object containing the assigned sequential offset (e.g. #42), confirming that the message is durably written to disk.",
                 file: "src/client/Producer.java",
-                code: `// Read ACK response from broker socket
+                code: `// Read binary response from broker and decode
 byte[] responseFrame = Protocol.readFrame(socketIn);
 ProduceResponse resp = Protocol.decodeProduceResponse(
     new DataInputStream(new ByteArrayInputStream(responseFrame))
 );
-System.out.println("Committed to " + resp.topic + ":" + resp.partition + " at offset #" + resp.baseOffset);`
+System.out.println("Saved to " + resp.topic + ":" + resp.partition + " at offset #" + resp.baseOffset);`
             }
         ]
     },
@@ -112,13 +112,17 @@ System.out.println("Committed to " + resp.topic + ":" + resp.partition + " at of
         steps: [
             {
                 num: "STEP 1",
-                title: "1. Lock Partition & Assign Monotonic Offset",
-                desc: "When the broker receives a produce request, it acquires a write lock (ReentrantReadWriteLock) on that partition so concurrent producer threads don't clash. It then calls nextOffset.getAndIncrement() to assign the message a strictly increasing 64-bit number (offset), guaranteeing strict ordering inside that partition.",
+                title: "1. Decode ProduceRequest & Lock Partition",
+                desc: "The broker receives the binary TCP frame, decodes it into a ProduceRequest object, and retrieves the CommitLog for that topic and partition. It acquires a partition write lock (ReentrantReadWriteLock) and assigns the next sequential offset (e.g. #42) using an atomic counter so messages are strictly ordered.",
                 file: "src/storage/CommitLog.java",
-                code: `rwLock.writeLock().lock();
+                code: `// 1. Decode binary request into ProduceRequest object
+ProduceRequest req = Protocol.decodeProduceRequest(dis, correlationId);
+CommitLog log = topicRegistry.getPartitionLog(req.topic, req.partition);
+
+// 2. Lock partition and assign next sequential offset
+rwLock.writeLock().lock();
 try {
-    // Generate next sequential offset (e.g. #42)
-    long assignedOffset = nextOffset.getAndIncrement();
+    long assignedOffset = nextOffset.getAndIncrement(); // e.g. #42
     Message stampedMsg = originalMsg.withOffset(assignedOffset);
     activeSegment.append(stampedMsg);
 } finally {
@@ -127,19 +131,19 @@ try {
             },
             {
                 num: "STEP 2",
-                title: "2. Append Directly to .log File (O(1) Sequential Disk I/O)",
-                desc: "The broker appends the binary message to the end of the active .log file using Java NIO FileChannel. Because it strictly appends to the end of the file and never overwrites or edits existing messages, disk writes are fast and efficient (O(1) sequential I/O) without random disk seek delays.",
+                title: "2. Append Binary Bytes to .log File (O(1) Speed)",
+                desc: "The broker converts the message into binary bytes and appends it directly to the active .log segment file using Java NIO FileChannel. Because it strictly appends to the end of the file and never modifies existing data, this sequential disk write is extremely fast (O(1)) without random disk seek delays.",
                 file: "src/storage/CommitLog.java",
-                code: `// Fast sequential append to active log file
+                code: `// Convert message to binary bytes and append to .log file
 byte[] serialized = Protocol.serializeMessage(stampedMsg);
-logChannel.write(ByteBuffer.wrap(serialized)); // O(1) Sequential Disk Write`
+logChannel.write(ByteBuffer.wrap(serialized)); // O(1) Sequential Disk Append`
             },
             {
                 num: "STEP 3",
-                title: "3. Write Bookmark to .index File (O(log N) Lookup)",
-                desc: "For every message written to the log, the broker records a fixed 16-byte bookmark in the companion .index file: 8 bytes for the message offset and 8 bytes for the physical byte position in the .log file. When a consumer later asks for offset #42, the broker uses binary search (O(log N)) on this index to jump straight to byte position 4,096 instead of scanning the whole file from the beginning.",
+                title: "3. Record Offset in .index File (O(log N) Lookup)",
+                desc: "Immediately after writing to the .log file, the broker records a 16-byte entry in the companion .index file: [8 bytes offset | 8 bytes file byte position]. When consumers later want to read offset #42, the broker uses binary search on this .index file to jump straight to byte position 4,096 instead of scanning the whole file from start to finish.",
                 file: "src/storage/OffsetIndex.java",
-                code: `// Fixed 16-byte index entry: [Offset: 8B] [Physical File Position: 8B]
+                code: `// Record 16-byte bookmark: [Offset: 8B | File Byte Position: 8B]
 long physicalBytePos = logChannel.position();
 index.append(assignedOffset, physicalBytePos); // Maps offset #42 -> byte 4,096`
             }
@@ -150,34 +154,39 @@ index.append(assignedOffset, physicalBytePos); // Maps offset #42 -> byte 4,096`
         steps: [
             {
                 num: "STEP 1",
-                title: "1. Poll Request with Current Offset Pointer",
-                desc: "The consumer connects to the broker and sends a FetchRequest specifying its topic, assigned partition, its current reading offset pointer (e.g. offset = 20), and a maximum batch size (e.g. 10 messages). It asks the broker to send messages starting from that exact position.",
+                title: "1. Create FetchRequest with Current Offset",
+                desc: "The Consumer creates a FetchRequest object specifying the topic, assigned partition, its current reading offset pointer (e.g. offset = 20), and max batch size (e.g. 10 messages). It converts this request object into binary bytes and sends it over the TCP socket to the broker.",
                 file: "src/client/Consumer.java",
-                code: `// Request messages starting from consumer's current offset pointer
+                code: `// 1. Create FetchRequest object with current offset pointer
 FetchRequest req = new FetchRequest(corrId, topic, partition, currentOffset, 10, 1024 * 1024);
-Protocol.writeFrame(socketOut, Protocol.encodeFetchRequest(req));`
+
+// 2. Convert to binary bytes and send over TCP
+byte[] payload = Protocol.encodeFetchRequest(req);
+Protocol.writeFrame(socketOut, payload);`
             },
             {
                 num: "STEP 2",
-                title: "2. Fast Index Seek & Non-Destructive Read",
-                desc: "The broker acquires a read lock (allowing multiple consumer groups to read concurrently) and queries the .index file to jump the FileChannel directly to the starting byte. It reads the batch into memory and verifies the CRC32 checksum. Unlike traditional queues, reading does NOT delete messages—they remain permanently on disk for other consumers.",
+                title: "2. Broker Reads .log File & Verifies Checksum",
+                desc: "The broker receives the request, acquires a read lock (so multiple consumers can read simultaneously), and checks the .index file to jump FileChannel directly to that byte position. It reads the binary bytes from the .log file, verifies the CRC32 checksum to make sure data isn't corrupted, and returns a FetchResponse. Crucially, reading does NOT delete messages from disk.",
                 file: "src/storage/CommitLog.java",
                 code: `rwLock.readLock().lock();
 try {
-    long bytePos = index.lookup(fetchOffset); // Direct jump via index
-    channel.position(bytePos);
-    channel.read(buffer); // Non-destructive read (messages stay on disk)
+    // 1. Jump directly to byte position from .index file
+    long startPos = index.lookup(fetchOffset);
+    channel.position(startPos);
+    channel.read(buffer); // Non-destructive read from disk
 } finally {
     rwLock.readLock().unlock();
 }`
             },
             {
                 num: "STEP 3",
-                title: "3. Advance Offset & Commit Progress to Disk",
-                desc: "The consumer processes the batch and advances its local offset pointer to the next offset (e.g. from 20 to 30). It then commits its progress to the broker, which saves the bookmark in __consumer_offsets.dat. If the consumer crashes and restarts, it resumes reading from offset #30 without duplicate work. Consumers can also SEEK back to any previous offset to replay messages.",
+                title: "3. Parse Messages, Advance Offset & Commit",
+                desc: "The Consumer receives the binary response, parses it into a list of Message objects, and processes them. It advances its local offset pointer from #20 to #30. Finally, it creates an OffsetCommitRequest and sends it to the broker, which saves the group's committed offset into __consumer_offsets.dat on disk so it can resume after restarts.",
                 file: "src/client/Consumer.java",
-                code: `// 1. Process batch and advance local pointer
-this.currentOffset = response.getNextOffset(); // e.g. 20 -> 30
+                code: `// 1. Parse binary response into Message objects and advance pointer
+List<Message> messages = response.getMessages();
+this.currentOffset = response.getNextOffset(); // e.g. advances 20 -> 30
 
 // 2. Commit progress to broker storage (__consumer_offsets.dat)
 consumer.commitSync("analytics-workers");`
