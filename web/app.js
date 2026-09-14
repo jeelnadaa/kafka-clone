@@ -9,215 +9,178 @@ const API_BASE = window.location.origin;
 // State
 let appState = {
     topics: [],
-    selectedTopic: 'orders',
-    selectedPartition: 0,
-    consumerOffset: 0,
-    polledRecords: [],
-    autoPollInterval: null,
-    currentFlow: 'produce',
+    selectedTopic: '',
+    selectedPartition: 'auto',
+    activeGroupId: 'analytics-workers',
+    clientRoundRobinSeq: 0,
+    consumerGroups: {
+        'analytics-workers': {
+            strategy: 'auto-range',
+            consumers: [
+                {
+                    id: 'c-1',
+                    name: 'Consumer #1',
+                    manualPartitions: [],
+                    assignedPartitions: [],
+                    offsets: {},
+                    polledRecords: [],
+                    autoPollInterval: null
+                }
+            ]
+        },
+        'billing-service': {
+            strategy: 'auto-range',
+            consumers: [
+                {
+                    id: 'c-1',
+                    name: 'Consumer #1',
+                    manualPartitions: [],
+                    assignedPartitions: [],
+                    offsets: {},
+                    polledRecords: [],
+                    autoPollInterval: null
+                }
+            ]
+        },
+        'notification-fleet': {
+            strategy: 'auto-range',
+            consumers: [
+                {
+                    id: 'c-1',
+                    name: 'Consumer #1',
+                    manualPartitions: [],
+                    assignedPartitions: [],
+                    offsets: {},
+                    polledRecords: [],
+                    autoPollInterval: null
+                }
+            ]
+        }
+    },
+    groupAutoPollInterval: null,
+    currentFlow: 'producer',
     currentStepIndex: 0
 };
 
+// ==========================================
 // Architecture & Pipeline Step Definitions
+// 3 Core Roles: Producer, Broker, Consumer
+// ==========================================
 const PIPELINES = {
-    produce: {
-        title: "PRODUCE FLOW: End-to-End Write Pipeline",
+    producer: {
+        title: "PRODUCER: How Messages Are Produced",
         steps: [
             {
                 num: "STEP 1",
-                title: "1. Producer Client Frame Encoding",
-                desc: "The client creates a Message instance, computes a CRC32 checksum over the payload, determines the target partition (either explicitly or via key hash), packs the ProduceRequest, and prefixes it with a 4-byte big-endian frame length.",
+                title: "1. Partition Routing & Checksum",
+                desc: "The producer chooses which partition should receive the message. If the message has a key (like user_123), it hashes the key so that all messages for that user always go to the exact same partition. If there is no key, it distributes them evenly across partitions using round-robin. It also calculates a 4-byte CRC32 checksum over the payload so the broker can verify that data wasn't corrupted in transit.",
                 file: "src/client/Producer.java",
-                code: `Message msg = Message.of(key, value);
-ProduceRequest req = new ProduceRequest(
-    corrId, topic, partition, (short) 1, 5000, Collections.singletonList(msg)
-);
-byte[] requestPayload = Protocol.encodeProduceRequest(req);
-Protocol.writeFrame(out, requestPayload); // [4-byte length] + payload`
+                code: `// 1. Determine target partition (Key Hash or Round-Robin)
+int partition = (key != null) ? Math.abs(key.hashCode() % pCount) : roundRobinSeq++ % pCount;
+
+// 2. Wrap message and compute CRC32 checksum
+Message msg = Message.of(key, value);`
             },
             {
                 num: "STEP 2",
-                title: "2. Broker TCP Frame Read & Demux",
-                desc: "Broker worker thread receives the TCP frame, verifies the 4-byte length guard (bounded to 32MB to prevent memory exhaustion), inspects the apiKey byte (1 = PRODUCE), and decodes the request parameters.",
-                file: "src/broker/BrokerServer.java",
-                code: `byte[] frame = Protocol.readFrame(in);
-DataInputStream dis = new DataInputStream(new ByteArrayInputStream(frame));
-byte apiKey = dis.readByte(); // 1 = PRODUCE
-ProduceRequest req = Protocol.decodeProduceRequest(dis, correlationId);
-CommitLog log = topicRegistry.getPartitionLog(req.topic, req.partition);`
+                title: "2. Binary Frame Packaging & TCP Send",
+                desc: "The producer packs the message into a ProduceRequest containing the topic and partition. It serializes this into a compact binary format, prefixes it with a 4-byte length header so the broker knows exactly how many bytes to read, and sends it directly over a persistent TCP socket to the broker.",
+                file: "src/client/Producer.java",
+                code: `// Wrap request with topic, partition, and message list
+ProduceRequest req = new ProduceRequest(topic, partition, Collections.singletonList(msg));
+byte[] requestPayload = Protocol.encodeProduceRequest(req);
+
+// Write length-prefixed frame: [4-byte length] + [binary payload]
+Protocol.writeFrame(socketOut, requestPayload);`
             },
             {
                 num: "STEP 3",
-                title: "3. Partition Write Lock & Monotonic Offset",
-                desc: "A ReentrantReadWriteLock writeLock is acquired for this partition. The next monotonic 64-bit offset is assigned via AtomicLong nextOffset.getAndIncrement(). This guarantees strict ordering across concurrent producer threads.",
+                title: "3. Acknowledgment (ACK) Confirmation",
+                desc: "The producer waits for a response from the broker. Once the broker successfully writes the message to disk, it sends back an acknowledgment containing the assigned sequential offset (e.g. #42). The producer now knows the message is safely and permanently stored on disk.",
+                file: "src/client/Producer.java",
+                code: `// Read ACK response from broker socket
+byte[] responseFrame = Protocol.readFrame(socketIn);
+ProduceResponse resp = Protocol.decodeProduceResponse(
+    new DataInputStream(new ByteArrayInputStream(responseFrame))
+);
+System.out.println("Committed to " + resp.topic + ":" + resp.partition + " at offset #" + resp.baseOffset);`
+            }
+        ]
+    },
+    broker: {
+        title: "BROKER: How Messages Are Saved to Disk",
+        steps: [
+            {
+                num: "STEP 1",
+                title: "1. Lock Partition & Assign Monotonic Offset",
+                desc: "When the broker receives a produce request, it acquires a write lock (ReentrantReadWriteLock) on that partition so concurrent producer threads don't clash. It then calls nextOffset.getAndIncrement() to assign the message a strictly increasing 64-bit number (offset), guaranteeing strict ordering inside that partition.",
                 file: "src/storage/CommitLog.java",
                 code: `rwLock.writeLock().lock();
 try {
+    // Generate next sequential offset (e.g. #42)
     long assignedOffset = nextOffset.getAndIncrement();
-    Message msgWithOffset = original.withOffset(assignedOffset);
-    activeSegment.append(msgWithOffset);
+    Message stampedMsg = originalMsg.withOffset(assignedOffset);
+    activeSegment.append(stampedMsg);
 } finally {
     rwLock.writeLock().unlock();
 }`
             },
             {
-                num: "STEP 4",
-                title: "4. Sequential FileChannel Append & Index Write",
-                desc: "The current physical byte position in the .log file is captured and immediately recorded into the 16-byte .index entry [8B offset | 8B position]. The binary message is then sequentially appended to the active segment using Java NIO FileChannel.",
-                file: "src/storage/CommitLog.java & OffsetIndex.java",
-                code: `// 1. Record position in sparse/dense index
-index.append(msg.getOffset(), channel.position());
-
-// 2. Sequential disk write via NIO FileChannel
-byte[] serialized = Protocol.serializeMessage(msg);
-channel.write(ByteBuffer.wrap(serialized));
-
-// 3. Roll segment if file size exceeds threshold (e.g., 1MB / 1GB)
-if (activeSegment.getCurrentSize() >= maxSegmentBytes) {
-    roll(nextOffset.get());
-}`
-            },
-            {
-                num: "STEP 5",
-                title: "5. Acknowledgment (ACK) Frame Returned",
-                desc: "The broker builds a ProduceResponse containing the assigned base offset, partition, and log append timestamp, wraps it in a length-prefixed TCP frame, and writes it back to the client socket.",
-                file: "src/broker/BrokerServer.java",
-                code: `ProduceResponse resp = new ProduceResponse(
-    corrId, ErrorCode.NONE, req.topic, req.partition, baseOffset, System.currentTimeMillis()
-);
-byte[] responsePayload = Protocol.encodeProduceResponse(resp);
-Protocol.writeFrame(out, responsePayload);`
-            }
-        ]
-    },
-    storage: {
-        title: "STORAGE ENGINE: Append-Only Log & Binary Index",
-        steps: [
-            {
-                num: "SEGMENT 1",
-                title: "1. The Anatomy of a Log Segment (.log)",
-                desc: "Partition data is broken into segment files named after their base offset (e.g. 00000000000000000000.log). Each message contains an 8-byte offset, 8-byte timestamp, 4-byte key length, key bytes, 4-byte value length, value bytes, and a 4-byte CRC32.",
-                file: "src/model/Message.java",
-                code: `// Storage Wire Layout (Binary):
-// [Offset: 8B] [Timestamp: 8B]
-// [KeyLen: 4B] [Key Bytes...]
-// [ValLen: 4B] [Val Bytes...]
-// [CRC32:  4B]`
-            },
-            {
-                num: "SEGMENT 2",
-                title: "2. The Offset Index (.index)",
-                desc: "For every message appended, a fixed 16-byte entry is written to the paired .index file: [8 bytes offset][8 bytes byte-position in .log]. In-memory, a ConcurrentSkipListMap mirrors this structure for instant lookups.",
-                file: "src/storage/OffsetIndex.java",
-                code: `public synchronized void append(long offset, long position) throws IOException {
-    inMemoryMap.put(offset, position);
-    ByteBuffer buf = ByteBuffer.allocate(16);
-    buf.putLong(offset);
-    buf.putLong(position);
-    buf.flip();
-    channel.write(buf);
-}`
-            },
-            {
-                num: "SEGMENT 3",
-                title: "3. O(log N) Floor Lookup",
-                desc: "When a consumer wants offset 1,450, the index performs a floor lookup for the nearest offset <= 1,450. It returns the exact byte position to seek FileChannel to, completely avoiding expensive full file scans!",
-                file: "src/storage/OffsetIndex.java",
-                code: `public long lookup(long targetOffset) {
-    Map.Entry<Long, Long> entry = inMemoryMap.floorEntry(targetOffset);
-    return (entry != null) ? entry.getValue() : 0L;
-}`
-            },
-            {
-                num: "SEGMENT 4",
-                title: "4. Crash Recovery on Broker Restart",
-                desc: "When the broker boots, it inspects existing .log files in numerical order. It loads index entries and reads the active segment to restore nextOffset to the highest offset + 1. Zero data loss, zero manual recovery.",
+                num: "STEP 2",
+                title: "2. Append Directly to .log File (O(1) Sequential Disk I/O)",
+                desc: "The broker appends the binary message to the end of the active .log file using Java NIO FileChannel. Because it strictly appends to the end of the file and never overwrites or edits existing messages, disk writes are fast and efficient (O(1) sequential I/O) without random disk seek delays.",
                 file: "src/storage/CommitLog.java",
-                code: `File[] logFiles = partitionDir.listFiles((dir, name) -> name.endsWith(".log"));
-Arrays.sort(logFiles, Comparator.comparing(File::getName));
-for (File file : logFiles) {
-    long base = Long.parseLong(file.getName().replace(".log", ""));
-    Segment seg = new Segment(partitionDir, base);
-    segments.put(base, seg);
-}
-nextOffset.set(highestOffset + 1);`
+                code: `// Fast sequential append to active log file
+byte[] serialized = Protocol.serializeMessage(stampedMsg);
+logChannel.write(ByteBuffer.wrap(serialized)); // O(1) Sequential Disk Write`
+            },
+            {
+                num: "STEP 3",
+                title: "3. Write Bookmark to .index File (O(log N) Lookup)",
+                desc: "For every message written to the log, the broker records a fixed 16-byte bookmark in the companion .index file: 8 bytes for the message offset and 8 bytes for the physical byte position in the .log file. When a consumer later asks for offset #42, the broker uses binary search (O(log N)) on this index to jump straight to byte position 4,096 instead of scanning the whole file from the beginning.",
+                file: "src/storage/OffsetIndex.java",
+                code: `// Fixed 16-byte index entry: [Offset: 8B] [Physical File Position: 8B]
+long physicalBytePos = logChannel.position();
+index.append(assignedOffset, physicalBytePos); // Maps offset #42 -> byte 4,096`
             }
         ]
     },
-    fetch: {
-        title: "FETCH FLOW: Sequential Consumer Polling",
+    consumer: {
+        title: "CONSUMER: How Messages Are Consumed",
         steps: [
             {
-                num: "POLL 1",
-                title: "1. Consumer Issues FetchRequest",
-                desc: "Consumer specifies topic, partition, current offset pointer, and buffer limits (maxMessages, maxBytes). The request is transmitted over persistent TCP.",
+                num: "STEP 1",
+                title: "1. Poll Request with Current Offset Pointer",
+                desc: "The consumer connects to the broker and sends a FetchRequest specifying its topic, assigned partition, its current reading offset pointer (e.g. offset = 20), and a maximum batch size (e.g. 10 messages). It asks the broker to send messages starting from that exact position.",
                 file: "src/client/Consumer.java",
-                code: `FetchRequest req = new FetchRequest(
-    corrId, topic, partition, currentOffset, maxMessages, maxBytes
-);
-Protocol.writeFrame(out, Protocol.encodeFetchRequest(req));`
+                code: `// Request messages starting from consumer's current offset pointer
+FetchRequest req = new FetchRequest(corrId, topic, partition, currentOffset, 10, 1024 * 1024);
+Protocol.writeFrame(socketOut, Protocol.encodeFetchRequest(req));`
             },
             {
-                num: "POLL 2",
-                title: "2. ReadLock & Index Direct Seek",
-                desc: "The broker acquires a readLock (allowing multiple parallel consumers to read concurrently). It queries the OffsetIndex to find the floor file position for fetchOffset and positions the FileChannel directly.",
+                num: "STEP 2",
+                title: "2. Fast Index Seek & Non-Destructive Read",
+                desc: "The broker acquires a read lock (allowing multiple consumer groups to read concurrently) and queries the .index file to jump the FileChannel directly to the starting byte. It reads the batch into memory and verifies the CRC32 checksum. Unlike traditional queues, reading does NOT delete messages—they remain permanently on disk for other consumers.",
                 file: "src/storage/CommitLog.java",
                 code: `rwLock.readLock().lock();
 try {
-    long startPos = index.lookup(fromOffset);
-    channel.position(startPos);
-    channel.read(buf);
+    long bytePos = index.lookup(fetchOffset); // Direct jump via index
+    channel.position(bytePos);
+    channel.read(buffer); // Non-destructive read (messages stay on disk)
 } finally {
     rwLock.readLock().unlock();
 }`
             },
             {
-                num: "POLL 3",
-                title: "3. Non-Destructive Buffer Read & CRC Check",
-                desc: "Messages are deserialized into memory without removing them from disk! The broker recalculates the CRC32 checksum to ensure zero silent bit-rot or file corruption before streaming back to the client.",
-                file: "src/model/Message.java",
-                code: `if (!msg.isChecksumValid()) {
-    throw new CorruptMessageException("CRC mismatch at offset " + msg.getOffset());
-}`
-            },
-            {
-                num: "POLL 4",
-                title: "4. Client Advances Monotonic Offset",
-                desc: "Consumer client receives the batch. Upon receiving messages up to offset K, it updates its local pointer: currentOffset = K + 1, ready for the next poll cycle.",
+                num: "STEP 3",
+                title: "3. Advance Offset & Commit Progress to Disk",
+                desc: "The consumer processes the batch and advances its local offset pointer to the next offset (e.g. from 20 to 30). It then commits its progress to the broker, which saves the bookmark in __consumer_offsets.dat. If the consumer crashes and restarts, it resumes reading from offset #30 without duplicate work. Consumers can also SEEK back to any previous offset to replay messages.",
                 file: "src/client/Consumer.java",
-                code: `if (!messages.isEmpty()) {
-    currentOffset = messages.get(messages.size() - 1).getOffset() + 1;
-}`
-            }
-        ]
-    },
-    commit: {
-        title: "OFFSET COMMIT FLOW: Consumer Group Persistence",
-        steps: [
-            {
-                num: "COMMIT 1",
-                title: "1. Consumer Group Commit Request",
-                desc: "After processing a batch of events, the consumer issues an OFFSET_COMMIT request with groupId, topic, partition, and processed offset.",
-                file: "src/client/Consumer.java",
-                code: `consumer.commitSync("analytics-workers");
-// Sends: groupId:analytics-workers, topic:orders, partition:0, offset:42`
-            },
-            {
-                num: "COMMIT 2",
-                title: "2. Coordinator Map Update & Disk Flush",
-                desc: "The broker stores the mapping in a ConcurrentHashMap and flushes to __consumer_offsets.dat using atomic temp-file replacement.",
-                file: "src/broker/TopicRegistry.java",
-                code: `committedOffsets.put(group + ":" + topic + ":" + partition, offset);
-// Atomic write: write to temp file, then rename
-tempFile.renameTo(offsetsFile);`
-            },
-            {
-                num: "COMMIT 3",
-                title: "3. Crash Recovery of Consumer Position",
-                desc: "If consumer or broker restarts, Consumer.loadAndSeekCommittedOffset() queries the broker to resume reading exactly where the group left off without processing duplicate messages!",
-                file: "src/client/Consumer.java",
-                code: `long committed = consumer.fetchCommittedOffset("analytics-workers");
-consumer.seek(committed); // Resume seamlessly!`
+                code: `// 1. Process batch and advance local pointer
+this.currentOffset = response.getNextOffset(); // e.g. 20 -> 30
+
+// 2. Commit progress to broker storage (__consumer_offsets.dat)
+consumer.commitSync("analytics-workers");`
             }
         ]
     }
@@ -227,12 +190,13 @@ consumer.seek(committed); // Resume seamlessly!`
 // Initialization
 // ==========================================
 
-document.addEventListener('DOMContentLoaded', () => {
+document.addEventListener('DOMContentLoaded', async () => {
     initTabs();
     initEventListeners();
     refreshBrokerStatus();
-    loadTopics();
+    await loadTopics();
     renderPipeline();
+    renderGroupChips();
 
     // Periodic status refresh
     setInterval(refreshBrokerStatus, 3000);
@@ -281,9 +245,9 @@ function initTabs() {
 
 function initEventListeners() {
     // Refresh all
-    document.getElementById('refreshAllBtn').addEventListener('click', () => {
+    document.getElementById('refreshAllBtn').addEventListener('click', async () => {
         refreshBrokerStatus();
-        loadTopics();
+        await loadTopics();
     });
 
     // Produce form
@@ -324,43 +288,86 @@ function initEventListeners() {
                     status: "SETTLED",
                     authCode: "AUTH_" + Math.random().toString(36).substring(7).toUpperCase()
                 }, null, 2);
+            } else if (tpl === 'text') {
+                keyInput.value = `txt_${randId}`;
+                valInput.value = `Order notification: Transaction TX-${randId} completed for customer Alice at ${new Date().toLocaleTimeString()}`;
             }
         });
     });
 
-    // Consumer controls
-    document.getElementById('pollMessagesBtn').addEventListener('click', () => pollMessages(10));
-    document.getElementById('consSeekBtn').addEventListener('click', handleSeekOffset);
-    document.getElementById('commitOffsetBtn').addEventListener('click', handleCommitOffset);
-    document.getElementById('clearPollBtn').addEventListener('click', () => {
-        appState.polledRecords = [];
-        renderConsumedFeed();
-    });
+    // Multi-Consumer Cluster controls
+    const addConsBtn = document.getElementById('addConsumerInstanceBtn');
+    if (addConsBtn) addConsBtn.addEventListener('click', addConsumerInstance);
 
-    // Auto-poll toggle
-    document.getElementById('toggleAutoPollBtn').addEventListener('click', () => {
-        const btn = document.getElementById('toggleAutoPollBtn');
-        if (appState.autoPollInterval) {
-            clearInterval(appState.autoPollInterval);
-            appState.autoPollInterval = null;
-            btn.textContent = "AUTO: OFF";
-            btn.classList.remove('btn-lime');
-            btn.classList.add('btn-white');
-        } else {
-            appState.autoPollInterval = setInterval(() => pollMessages(5), 1200);
-            btn.textContent = "AUTO: ON (1.2s)";
-            btn.classList.remove('btn-white');
-            btn.classList.add('btn-lime');
-        }
-    });
+    const pollAllBtn = document.getElementById('pollAllConsumersBtn');
+    if (pollAllBtn) pollAllBtn.addEventListener('click', pollAllConsumers);
+
+    const autoAllBtn = document.getElementById('toggleAutoPollAllBtn');
+    if (autoAllBtn) autoAllBtn.addEventListener('click', toggleAutoPollAll);
+
+    // Assignment Strategy buttons
+    const stratRange = document.getElementById('stratRangeBtn');
+    if (stratRange) stratRange.addEventListener('click', () => setAssignmentStrategy('auto-range'));
+
+    const stratRR = document.getElementById('stratRoundRobinBtn');
+    if (stratRR) stratRR.addEventListener('click', () => setAssignmentStrategy('auto-rr'));
+
+    const stratManual = document.getElementById('stratManualBtn');
+    if (stratManual) stratManual.addEventListener('click', () => setAssignmentStrategy('manual'));
+
+    // Consumer Group modal & creation listeners
+    const openGroupModalBtn = document.getElementById('openCreateGroupModalBtn');
+    if (openGroupModalBtn) openGroupModalBtn.addEventListener('click', openCreateGroupModal);
+
+
+    const closeGroupModalBtn = document.getElementById('closeGroupModalBtn');
+    if (closeGroupModalBtn) closeGroupModalBtn.addEventListener('click', closeCreateGroupModal);
+
+    const cancelGroupModalBtn = document.getElementById('cancelGroupModalBtn');
+    if (cancelGroupModalBtn) cancelGroupModalBtn.addEventListener('click', closeCreateGroupModal);
+
+    const createGroupForm = document.getElementById('createGroupForm');
+    if (createGroupForm) createGroupForm.addEventListener('submit', handleCreateGroup);
 
     // Target change updates
-    document.getElementById('prodTopicSelect').addEventListener('change', (e) => {
+    document.getElementById('prodTopicSelect').addEventListener('change', async (e) => {
         appState.selectedTopic = e.target.value;
+        const consSel = document.getElementById('consTopicSelect');
+        if (consSel) consSel.value = e.target.value;
+        const inspSel = document.getElementById('inspectTopicSelect');
+        if (inspSel) inspSel.value = e.target.value;
+        await syncCommittedOffsets(appState.activeGroupId, e.target.value);
+        updatePartitionSelects(e.target.value);
         updateTargetBadge();
     });
+
+    const consTopicSel = document.getElementById('consTopicSelect');
+    if (consTopicSel) consTopicSel.addEventListener('change', async (e) => {
+        appState.selectedTopic = e.target.value;
+        document.getElementById('prodTopicSelect').value = e.target.value;
+        document.getElementById('inspectTopicSelect').value = e.target.value;
+        await syncCommittedOffsets(appState.activeGroupId, e.target.value);
+        updatePartitionSelects(e.target.value);
+        updateTargetBadge();
+    });
+
+    const consGroupInput = document.getElementById('consGroupInput');
+    if (consGroupInput) {
+        consGroupInput.addEventListener('change', (e) => {
+            const val = e.target.value.trim();
+            if (val) switchConsumerGroup(val);
+        });
+        consGroupInput.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') {
+                e.preventDefault();
+                const val = e.target.value.trim();
+                if (val) switchConsumerGroup(val);
+            }
+        });
+    }
+
     document.getElementById('prodPartitionSelect').addEventListener('change', (e) => {
-        appState.selectedPartition = parseInt(e.target.value);
+        appState.selectedPartition = e.target.value;
         updateTargetBadge();
     });
 
@@ -375,6 +382,21 @@ function initEventListeners() {
         document.getElementById('createTopicModal').classList.add('hidden');
     });
     document.getElementById('createTopicForm').addEventListener('submit', handleCreateTopic);
+
+    // Seek warning modal controls
+    const closeSeekBtn = document.getElementById('closeSeekModalBtn');
+    if (closeSeekBtn) closeSeekBtn.addEventListener('click', closeSeekModal);
+    const ackSeekBtn = document.getElementById('ackSeekModalBtn');
+    if (ackSeekBtn) ackSeekBtn.addEventListener('click', closeSeekModal);
+    const seekModal = document.getElementById('seekWarningModal');
+    if (seekModal) {
+        seekModal.addEventListener('click', (e) => {
+            if (e.target === seekModal) closeSeekModal();
+        });
+    }
+    document.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape') closeSeekModal();
+    });
 
     // Inspector controls
     document.getElementById('inspectRefreshBtn').addEventListener('click', loadLogInspector);
@@ -420,11 +442,46 @@ async function refreshBrokerStatus() {
     }
 }
 
+async function syncCommittedOffsets(groupId, topicName) {
+    if (!groupId || !topicName) return;
+    const group = getOrCreateGroup(groupId);
+    try {
+        const res = await fetch(`${API_BASE}/api/commit?groupId=${encodeURIComponent(groupId)}&topic=${encodeURIComponent(topicName)}`);
+        if (!res.ok) return;
+        const data = await res.json();
+        const serverOffsets = data.offsets || {};
+        group.consumers.forEach(c => {
+            if (!c.offsets) c.offsets = {};
+            for (const [pStr, off] of Object.entries(serverOffsets)) {
+                const p = parseInt(pStr);
+                if (off !== undefined && off >= 0) {
+                    c.offsets[p] = off;
+                }
+            }
+        });
+    } catch (e) {
+        console.error("Failed to sync committed offsets:", e);
+    }
+}
+
 async function loadTopics() {
     try {
         const res = await fetch(`${API_BASE}/api/topics`);
         const topics = await res.json();
         appState.topics = topics;
+
+        // Auto-select valid topic
+        if (topics.length > 0) {
+            const topicExists = topics.some(t => t.topic === appState.selectedTopic);
+            if (!topicExists) {
+                appState.selectedTopic = topics[0].topic;
+            }
+        }
+
+        // Pre-fetch committed offsets from the broker before rendering consumers
+        if (appState.selectedTopic) {
+            await syncCommittedOffsets(appState.activeGroupId, appState.selectedTopic);
+        }
 
         // Populate selects
         populateTopicSelects(topics);
@@ -437,29 +494,72 @@ async function loadTopics() {
 }
 
 function populateTopicSelects(topics) {
+    if (topics.length > 0) {
+        const topicExists = topics.some(t => t.topic === appState.selectedTopic);
+        if (!topicExists) {
+            appState.selectedTopic = topics[0].topic;
+        }
+    }
+
     const selects = ['prodTopicSelect', 'consTopicSelect', 'inspectTopicSelect'];
     selects.forEach(selId => {
         const sel = document.getElementById(selId);
-        const currVal = sel.value;
+        if (!sel) return;
         sel.innerHTML = '';
         topics.forEach(t => {
             const opt = document.createElement('option');
             opt.value = t.topic;
             opt.textContent = t.topic;
-            if (t.topic === currVal || (t.topic === appState.selectedTopic && !currVal)) {
+            if (t.topic === appState.selectedTopic) {
                 opt.selected = true;
             }
             sel.appendChild(opt);
         });
-        if (sel.options.length > 0 && !sel.value) {
-            sel.selectedIndex = 0;
+        if (appState.selectedTopic) {
+            sel.value = appState.selectedTopic;
         }
     });
 
-    if (topics.length > 0 && !appState.selectedTopic) {
-        appState.selectedTopic = topics[0].topic;
-    }
+    updatePartitionSelects(appState.selectedTopic);
     updateTargetBadge();
+}
+
+function updatePartitionSelects(topicName) {
+    const topic = (appState.topics || []).find(t => t.topic === topicName);
+    const pCount = topic && topic.partitions && topic.partitions.length > 0 ? topic.partitions.length : 3;
+
+    // 1. Producer Partition Select
+    const prodSel = document.getElementById('prodPartitionSelect');
+    if (prodSel) {
+        const prevVal = prodSel.value;
+        prodSel.innerHTML = '<option value="auto">✨ Auto (Key Hash / Round-Robin)</option>';
+        for (let i = 0; i < pCount; i++) {
+            const opt = document.createElement('option');
+            opt.value = String(i);
+            opt.textContent = `Partition ${i}`;
+            if (prevVal === String(i)) opt.selected = true;
+            prodSel.appendChild(opt);
+        }
+        if (prevVal === 'auto' || !prevVal) prodSel.value = 'auto';
+    }
+
+    // 2. Inspector Partition Select
+    const inspSel = document.getElementById('inspectPartSelect');
+    if (inspSel) {
+        const prevVal = inspSel.value;
+        inspSel.innerHTML = '';
+        for (let i = 0; i < pCount; i++) {
+            const opt = document.createElement('option');
+            opt.value = String(i);
+            opt.textContent = `Partition ${i}`;
+            if (prevVal === String(i)) opt.selected = true;
+            inspSel.appendChild(opt);
+        }
+        if (!inspSel.value && inspSel.options.length > 0) inspSel.selectedIndex = 0;
+    }
+
+    // 3. Rebalance consumer cluster for this topic
+    rebalanceAndRenderConsumers();
 }
 
 function renderTopicsGrid(topics) {
@@ -473,13 +573,18 @@ function renderTopicsGrid(topics) {
     topics.forEach(t => {
         const card = document.createElement('div');
         card.className = `topic-card ${t.topic === appState.selectedTopic ? 'active' : ''}`;
-        card.addEventListener('click', () => {
+        card.addEventListener('click', async () => {
             appState.selectedTopic = t.topic;
             document.querySelectorAll('.topic-card').forEach(c => c.classList.remove('active'));
             card.classList.add('active');
-            document.getElementById('prodTopicSelect').value = t.topic;
-            document.getElementById('consTopicSelect').value = t.topic;
-            document.getElementById('inspectTopicSelect').value = t.topic;
+            const prodSel = document.getElementById('prodTopicSelect');
+            if (prodSel) prodSel.value = t.topic;
+            const consSel = document.getElementById('consTopicSelect');
+            if (consSel) consSel.value = t.topic;
+            const inspSel = document.getElementById('inspectTopicSelect');
+            if (inspSel) inspSel.value = t.topic;
+            await syncCommittedOffsets(appState.activeGroupId, t.topic);
+            updatePartitionSelects(t.topic);
             updateTargetBadge();
         });
 
@@ -507,13 +612,13 @@ function renderTopicsGrid(topics) {
 }
 
 // ==========================================
-// Produce Message
+// Produce Message (Supports Auto Routing)
 // ==========================================
 
 async function handleProduceSubmit(e) {
     e.preventDefault();
     const topic = document.getElementById('prodTopicSelect').value;
-    const partition = parseInt(document.getElementById('prodPartitionSelect').value);
+    const partSelectVal = document.getElementById('prodPartitionSelect').value;
     const key = document.getElementById('prodKeyInput').value.trim();
     const value = document.getElementById('prodValueInput').value.trim();
 
@@ -525,6 +630,30 @@ async function handleProduceSubmit(e) {
     const submitBtn = document.getElementById('produceSubmitBtn');
     submitBtn.disabled = true;
     submitBtn.textContent = "WRITING TO COMMIT LOG...";
+
+    // Determine target partition
+    const topicObj = (appState.topics || []).find(t => t.topic === topic);
+    const pCount = topicObj && topicObj.partitions && topicObj.partitions.length > 0 ? topicObj.partitions.length : 3;
+    let partition = -1;
+    let routeMode = 'Manual';
+
+    if (partSelectVal === 'auto') {
+        if (key) {
+            let hash = 0;
+            for (let i = 0; i < key.length; i++) {
+                hash = ((hash << 5) - hash) + key.charCodeAt(i);
+                hash |= 0;
+            }
+            partition = Math.abs(hash) % pCount;
+            routeMode = `Auto (Key Hash)`;
+        } else {
+            partition = Math.abs(appState.clientRoundRobinSeq++) % pCount;
+            routeMode = `Auto (Round-Robin)`;
+        }
+    } else {
+        partition = parseInt(partSelectVal);
+        routeMode = `Manual (Part ${partition})`;
+    }
 
     const t0 = performance.now();
     try {
@@ -541,7 +670,7 @@ async function handleProduceSubmit(e) {
             const receipt = document.getElementById('producerReceipt');
             receipt.classList.remove('hidden');
             document.getElementById('rcptOffset').textContent = `#${data.offset}`;
-            document.getElementById('rcptPart').textContent = `${data.topic}:${data.partition}`;
+            document.getElementById('rcptPart').textContent = `${data.topic}:${data.partition} [${routeMode}]`;
             document.getElementById('rcptCrc').textContent = data.crc;
             document.getElementById('rcptTs').textContent = `${new Date(data.timestamp).toLocaleTimeString()} (${latency}ms)`;
 
@@ -550,7 +679,7 @@ async function handleProduceSubmit(e) {
             setTimeout(() => { receipt.style.transform = 'scale(1)'; }, 150);
 
             // Refresh topics
-            loadTopics();
+            await loadTopics();
             refreshBrokerStatus();
         } else {
             alert("Produce failed: " + (data.error || "Unknown error"));
@@ -564,104 +693,699 @@ async function handleProduceSubmit(e) {
 }
 
 // ==========================================
-// Consumer Polling & Committing
+// Consumer Group Cluster & Partition Assignment
 // ==========================================
 
-async function pollMessages(limit = 10) {
-    const topic = document.getElementById('consTopicSelect').value;
-    const partition = parseInt(document.getElementById('consPartSelect').value);
-    const offset = appState.consumerOffset;
-
-    if (!topic) return;
-
-    try {
-        const res = await fetch(`${API_BASE}/api/consume?topic=${encodeURIComponent(topic)}&partition=${partition}&offset=${offset}&limit=${limit}`);
-        const data = await res.json();
-
-        if (data.messages && data.messages.length > 0) {
-            // Append messages to polled records
-            data.messages.forEach(m => {
-                appState.polledRecords.unshift(m); // new messages on top
-            });
-
-            // Advance consumer offset pointer
-            appState.consumerOffset = data.nextOffset;
-            document.getElementById('consumerPosBadge').textContent = `POS: ${appState.consumerOffset}`;
-            document.getElementById('consSeekInput').value = appState.consumerOffset;
-
-            renderConsumedFeed();
-        }
-    } catch (e) {
-        console.error("Poll error:", e);
+function getOrCreateGroup(groupId) {
+    if (!appState.consumerGroups[groupId]) {
+        appState.consumerGroups[groupId] = {
+            strategy: 'auto-range',
+            consumers: [
+                {
+                    id: 'c-1',
+                    name: 'Consumer #1',
+                    manualPartitions: [],
+                    assignedPartitions: [],
+                    offsets: {},
+                    polledRecords: [],
+                    autoPollInterval: null
+                }
+            ]
+        };
     }
+    return appState.consumerGroups[groupId];
 }
 
-function handleSeekOffset() {
-    const seekVal = parseInt(document.getElementById('consSeekInput').value);
-    if (!isNaN(seekVal) && seekVal >= 0) {
-        appState.consumerOffset = seekVal;
-        document.getElementById('consumerPosBadge').textContent = `POS: ${seekVal}`;
-        pollMessages(10);
-    }
-}
-
-async function handleCommitOffset() {
-    const groupId = document.getElementById('consGroupInput').value.trim();
-    const topic = document.getElementById('consTopicSelect').value;
-    const partition = parseInt(document.getElementById('consPartSelect').value);
-    const offset = appState.consumerOffset;
-
-    if (!groupId) {
-        alert("Enter a Consumer Group ID");
-        return;
-    }
-
-    try {
-        const res = await fetch(`${API_BASE}/api/commit`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ groupId, topic, partition, offset })
+async function switchConsumerGroup(groupId) {
+    if (!groupId) return;
+    
+    // Stop any active auto-poll timers on the previous group to prevent background polling
+    const prevGroup = appState.consumerGroups[appState.activeGroupId];
+    if (prevGroup && prevGroup.consumers) {
+        prevGroup.consumers.forEach(c => {
+            if (c.autoPollInterval) {
+                clearInterval(c.autoPollInterval);
+                c.autoPollInterval = null;
+            }
         });
-        const data = await res.json();
-        if (data.success) {
-            const btn = document.getElementById('commitOffsetBtn');
-            const originalText = btn.textContent;
-            btn.textContent = `COMMITTED (OFFSET ${offset})`;
-            btn.style.background = '#00E676';
-            setTimeout(() => {
-                btn.textContent = originalText;
-                btn.style.background = '';
-            }, 1800);
+    }
+
+    appState.activeGroupId = groupId;
+    const input = document.getElementById('consGroupInput');
+    if (input) input.value = groupId;
+
+    getOrCreateGroup(groupId);
+    renderGroupChips();
+    await syncCommittedOffsets(groupId, appState.selectedTopic);
+    rebalanceAndRenderConsumers();
+}
+
+function renderGroupChips() {
+    const container = document.getElementById('groupChipsContainer');
+    if (!container) return;
+    container.innerHTML = '';
+    const groupIds = Object.keys(appState.consumerGroups);
+    groupIds.forEach(gid => {
+        const chip = document.createElement('button');
+        chip.type = 'button';
+        chip.className = `chip group-chip ${gid === appState.activeGroupId ? 'active' : ''}`;
+        chip.setAttribute('data-group', gid);
+        chip.textContent = gid;
+        chip.addEventListener('click', () => switchConsumerGroup(gid));
+        container.appendChild(chip);
+    });
+}
+
+function openCreateGroupModal() {
+    const modal = document.getElementById('createGroupModal');
+    if (modal) {
+        modal.classList.remove('hidden');
+        const input = document.getElementById('newGroupName');
+        if (input) {
+            input.value = '';
+            setTimeout(() => input.focus(), 50);
         }
-    } catch (e) {
-        alert("Offset commit failed: " + e.message);
     }
 }
 
-function renderConsumedFeed() {
-    const container = document.getElementById('consumedRecordsList');
-    document.getElementById('pollCount').textContent = appState.polledRecords.length;
+function closeCreateGroupModal() {
+    const modal = document.getElementById('createGroupModal');
+    if (modal) modal.classList.add('hidden');
+}
 
-    if (appState.polledRecords.length === 0) {
-        container.innerHTML = `<div class="empty-state">No records polled yet. Click [POLL (NEXT 10)] above.</div>`;
+function handleCreateGroup(e) {
+    e.preventDefault();
+    const nameInput = document.getElementById('newGroupName');
+    const instancesInput = document.getElementById('newGroupInstances');
+    const groupName = nameInput.value.trim().toLowerCase().replace(/[^a-z0-9_-]/g, '-');
+    const instances = Math.min(8, Math.max(1, parseInt(instancesInput.value) || 1));
+
+    if (!groupName) {
+        alert("Please enter a valid group ID.");
         return;
     }
 
+    if (!appState.consumerGroups[groupName]) {
+        const consumers = [];
+        for (let i = 1; i <= instances; i++) {
+            consumers.push({
+                id: `c-${i}`,
+                name: `Consumer #${i}`,
+                manualPartitions: [],
+                assignedPartitions: [],
+                offsets: {},
+                polledRecords: [],
+                autoPollInterval: null
+            });
+        }
+        appState.consumerGroups[groupName] = {
+            strategy: 'auto-range',
+            consumers: consumers
+        };
+    }
+
+    closeCreateGroupModal();
+    switchConsumerGroup(groupName);
+}
+
+function setAssignmentStrategy(strategy) {
+    const group = getOrCreateGroup(appState.activeGroupId);
+    if (strategy === 'manual' && group.strategy !== 'manual') {
+        // Seamless transition: initialize manualPartitions from current assignments with strict 1-to-1 mapping
+        const claimed = new Set();
+        group.consumers.forEach(c => {
+            c.manualPartitions = (c.assignedPartitions || []).filter(p => {
+                if (!claimed.has(p)) {
+                    claimed.add(p);
+                    return true;
+                }
+                return false;
+            });
+        });
+    }
+    group.strategy = strategy;
+    rebalanceAndRenderConsumers();
+}
+
+async function addConsumerInstance() {
+    const group = getOrCreateGroup(appState.activeGroupId);
+    const newIdx = group.consumers.length + 1;
+    group.consumers.push({
+        id: `c-${Date.now().toString(36).substring(4)}`,
+        name: `Consumer #${newIdx}`,
+        manualPartitions: [],
+        assignedPartitions: [],
+        offsets: {},
+        polledRecords: [],
+        autoPollInterval: null
+    });
+    await syncCommittedOffsets(appState.activeGroupId, appState.selectedTopic);
+    rebalanceAndRenderConsumers();
+}
+
+function removeConsumerInstance(consumerId) {
+    const group = getOrCreateGroup(appState.activeGroupId);
+    if (group.consumers.length <= 1) return;
+    const target = group.consumers.find(c => c.id === consumerId);
+    if (target && target.autoPollInterval) {
+        clearInterval(target.autoPollInterval);
+        target.autoPollInterval = null;
+    }
+    group.consumers = group.consumers.filter(c => c.id !== consumerId);
+    rebalanceAndRenderConsumers();
+}
+
+function rebalanceAndRenderConsumers() {
+    const groupId = appState.activeGroupId || 'analytics-workers';
+    const group = getOrCreateGroup(groupId);
+    const topic = (appState.topics || []).find(t => t.topic === appState.selectedTopic) || { partitions: [{ partition: 0, highWatermark: 0 }] };
+    const pCount = Math.max(1, (topic.partitions || []).length);
+    const consumers = group.consumers;
+    const cCount = Math.max(1, consumers.length);
+
+    // 1. Calculate partition assignments according to strategy
+    if (group.strategy === 'auto-range') {
+        const base = Math.floor(pCount / cCount);
+        const remainder = pCount % cCount;
+        let pIndex = 0;
+        for (let i = 0; i < cCount; i++) {
+            const count = base + (i < remainder ? 1 : 0);
+            consumers[i].assignedPartitions = [];
+            for (let j = 0; j < count; j++) {
+                consumers[i].assignedPartitions.push(pIndex++);
+            }
+        }
+    } else if (group.strategy === 'auto-rr') {
+        consumers.forEach(c => c.assignedPartitions = []);
+        for (let p = 0; p < pCount; p++) {
+            consumers[p % cCount].assignedPartitions.push(p);
+        }
+    } else if (group.strategy === 'manual') {
+        // Enforce strict Kafka invariant: Each partition can belong to AT MOST ONE consumer instance in the same group!
+        const claimedPartitions = new Set();
+        consumers.forEach(c => {
+            c.manualPartitions = (c.manualPartitions || []).filter(p => {
+                if (p < pCount && !claimedPartitions.has(p)) {
+                    claimedPartitions.add(p);
+                    return true;
+                }
+                return false;
+            });
+            c.assignedPartitions = [...c.manualPartitions];
+        });
+    }
+
+    // 2. Update Header Badges & Strategy Buttons
+    const badgeCount = document.getElementById('consumerGroupCountBadge');
+    if (badgeCount) badgeCount.textContent = `${cCount} CONSUMER${cCount > 1 ? 'S' : ''}`;
+    const badgePos = document.getElementById('consumerPosBadge');
+    if (badgePos) badgePos.textContent = `GROUP: ${groupId}`;
+
+    const stratRange = document.getElementById('stratRangeBtn');
+    const stratRR = document.getElementById('stratRoundRobinBtn');
+    const stratManual = document.getElementById('stratManualBtn');
+    if (stratRange) stratRange.className = `btn btn-xs ${group.strategy === 'auto-range' ? 'btn-yellow active' : 'btn-white'}`;
+    if (stratRR) stratRR.className = `btn btn-xs ${group.strategy === 'auto-rr' ? 'btn-yellow active' : 'btn-white'}`;
+    if (stratManual) stratManual.className = `btn btn-xs ${group.strategy === 'manual' ? 'btn-yellow active' : 'btn-white'}`;
+
+    // Synchronize toolbar Auto Poll button state
+    const autoAllBtn = document.getElementById('toggleAutoPollAllBtn');
+    if (autoAllBtn) {
+        const isAnyRunning = consumers.some(c => !!c.autoPollInterval);
+        if (isAnyRunning) {
+            autoAllBtn.textContent = 'AUTO: ON (1.2s)';
+            autoAllBtn.className = 'btn btn-sm btn-lime';
+        } else {
+            autoAllBtn.textContent = 'AUTO: OFF';
+            autoAllBtn.className = 'btn btn-sm btn-white';
+        }
+    }
+
+    // 3. Render Consumer Instance Cards
+    const container = document.getElementById('consumerInstancesContainer');
+    if (!container) return;
     container.innerHTML = '';
-    appState.polledRecords.slice(0, 30).forEach(m => {
+
+    consumers.forEach(c => {
         const card = document.createElement('div');
-        card.className = 'record-card';
+        card.className = 'consumer-instance-card';
+        card.id = `card-${c.id}`;
+
+        const isAutoRunning = !!c.autoPollInterval;
+        let assignedHtml = '';
+        if (group.strategy === 'manual') {
+            for (let p = 0; p < pCount; p++) {
+                const isChecked = c.assignedPartitions.includes(p);
+                // Check if another consumer in this group has already claimed partition p
+                const owner = group.consumers.find(other => other.id !== c.id && (other.assignedPartitions || []).includes(p));
+                const isDisabled = !isChecked && !!owner;
+                const tooltip = isDisabled 
+                    ? `Partition ${p} is already claimed by ${owner.name}. In a Kafka consumer group, a partition can only be assigned to 1 consumer!` 
+                    : isChecked 
+                        ? `Partition ${p} is assigned to ${c.name}. Uncheck to release.` 
+                        : `Click to assign Partition ${p} exclusively to ${c.name}.`;
+
+                const ownerBadge = isDisabled ? ` <span class="owner-tag">(${escapeHtml(owner.name.replace('Consumer #', 'C'))})</span>` : '';
+
+                assignedHtml += `
+                    <label class="part-chk-label ${isDisabled ? 'disabled' : ''} ${isChecked ? 'active-chk' : ''}" title="${tooltip}">
+                        <input type="checkbox" class="manual-part-chk" data-cid="${c.id}" data-part="${p}" 
+                            ${isChecked ? 'checked' : ''} 
+                            ${isDisabled ? 'disabled' : ''}>
+                        Part ${p}${ownerBadge}
+                    </label>
+                `;
+            }
+        } else {
+            if (c.assignedPartitions.length === 0) {
+                assignedHtml = `<span class="dim text-xs">Idle (no partitions assigned)</span>`;
+            } else {
+                c.assignedPartitions.forEach(p => {
+                    assignedHtml += `<span class="pill-badge pill-yellow">Part ${p}</span>`;
+                });
+            }
+        }
+
+        // Lag & Partition detail rows
+        let lagRowsHtml = '';
+        if (c.assignedPartitions.length === 0) {
+            lagRowsHtml = `<div class="empty-state text-xs" style="padding:6px;">No partitions assigned to this worker. Add partitions or adjust strategy.</div>`;
+        } else {
+            c.assignedPartitions.forEach(p => {
+                const partMeta = (topic.partitions || []).find(item => item.partition === p) || { highWatermark: 0 };
+                const currentPos = (c.offsets[p] !== undefined) ? c.offsets[p] : 0;
+                const hwm = partMeta.highWatermark || 0;
+                const lag = Math.max(0, hwm - currentPos);
+                const lagClass = lag > 0 ? 'lag-badge has-lag' : 'lag-badge';
+
+                lagRowsHtml += `
+                    <div class="part-lag-item">
+                        <span><strong>Part ${p}</strong></span>
+                        <span>
+                            <span title="Consumer Read Offset (Next message this worker will fetch)">POS: <strong class="highlight">${currentPos}</strong></span>
+                            <span class="dim"> | </span>
+                            <span title="Broker Disk High Watermark (Total messages committed to log on disk)">HWM: ${hwm}</span>
+                        </span>
+                        <span class="${lagClass}" title="${lag > 0 ? `${lag} unread messages on disk waiting to be polled` : 'Consumer caught up'}">LAG: ${lag}</span>
+                        <div class="part-seek-box">
+                            <input type="number" min="0" max="${hwm}" class="part-seek-input" data-cid="${c.id}" data-part="${p}" id="seek-${c.id}-${p}" value="${currentPos}" title="Seek offset: 0 to ${hwm} (HWM)">
+                            <button type="button" class="btn btn-xs btn-black part-seek-btn" data-cid="${c.id}" data-part="${p}">SEEK</button>
+                        </div>
+                    </div>
+                `;
+            });
+        }
+
+        // Records list
+        const polledCount = (c.polledRecords || []).length;
+        let recordsHtml = '';
+        if (polledCount === 0) {
+            recordsHtml = `<div class="empty-state text-xs">No records polled yet. Click [POLL (NEXT 10)] above.</div>`;
+        } else {
+            c.polledRecords.slice(0, 15).forEach(m => {
+                recordsHtml += `
+                    <div class="instance-record-item">
+                        <div class="record-content-box">
+                            <div class="record-header-meta">
+                                <span class="pill-badge pill-black" style="font-size:0.68rem;">P${m.partition !== undefined ? m.partition : '-'} : #${m.offset}</span>
+                                ${m.key ? `<span class="pill-badge pill-yellow" style="font-size:0.65rem;">KEY: ${escapeHtml(m.key)}</span>` : ''}
+                            </div>
+                            <div class="mono record-val">${escapeHtml(m.value)}</div>
+                        </div>
+                        <span class="dim" style="font-size:0.68rem; white-space:nowrap;">${new Date(m.timestamp).toLocaleTimeString()}</span>
+                    </div>
+                `;
+            });
+        }
+
         card.innerHTML = `
-            <div class="record-top">
-                <span class="record-offset">OFFSET #${m.offset}</span>
-                <span class="pill-badge pill-green">CRC OK: ${m.crc}</span>
-                <span class="dim mono">${new Date(m.timestamp).toLocaleTimeString()}</span>
+            <div class="consumer-card-header">
+                <div class="consumer-identity">
+                    <span class="consumer-status-dot ${isAutoRunning ? '' : 'idle'}"></span>
+                    <span class="pill-badge pill-black">${c.name}</span>
+                    <span class="text-xs dim mono">${c.id}</span>
+                    <span class="pill-badge pill-lime" style="font-size:0.65rem;" title="Offsets are automatically committed to disk on every poll & seek">AUTO-COMMIT</span>
+                </div>
+                <div class="consumer-card-actions">
+                    <button type="button" class="btn btn-xs btn-cyan poll-instance-btn" data-cid="${c.id}">POLL (NEXT 10)</button>
+                    <button type="button" class="btn btn-xs ${isAutoRunning ? 'btn-lime' : 'btn-white'} auto-instance-btn" data-cid="${c.id}">${isAutoRunning ? 'AUTO: ON' : 'AUTO: OFF'}</button>
+                    ${consumers.length > 1 ? `<button type="button" class="btn btn-xs btn-pink remove-instance-btn" data-cid="${c.id}" title="Remove Consumer">&times;</button>` : ''}
+                </div>
             </div>
-            ${m.key ? `<div class="record-key">KEY: <strong>${escapeHtml(m.key)}</strong></div>` : ''}
-            <div class="record-val">${escapeHtml(m.value)}</div>
+
+            <div class="assigned-partitions-bar">
+                <span class="text-xs">ASSIGNED PARTITIONS:</span>
+                <div class="partition-assignment-chips">
+                    ${assignedHtml}
+                </div>
+            </div>
+
+            <div class="partition-lag-row">
+                ${lagRowsHtml}
+            </div>
+
+            <div class="instance-feed-container">
+                <div class="feed-header">
+                    <span class="text-xs">POLLED RECORDS (${polledCount})</span>
+                    <button type="button" class="clean-link clear-instance-feed-btn" data-cid="${c.id}" style="font-size:0.75rem;">Clear</button>
+                </div>
+                <div class="instance-records-list">
+                    ${recordsHtml}
+                </div>
+            </div>
         `;
+
         container.appendChild(card);
     });
+
+    wireConsumerCardEvents();
+}
+
+function wireConsumerCardEvents() {
+    // Poll buttons
+    document.querySelectorAll('.poll-instance-btn').forEach(btn => {
+        btn.addEventListener('click', () => {
+            const cid = btn.getAttribute('data-cid');
+            pollConsumerInstance(cid, 10);
+        });
+    });
+
+
+    // Auto buttons
+    document.querySelectorAll('.auto-instance-btn').forEach(btn => {
+        btn.addEventListener('click', () => {
+            const cid = btn.getAttribute('data-cid');
+            toggleAutoPollConsumer(cid);
+        });
+    });
+
+    // Remove buttons
+    document.querySelectorAll('.remove-instance-btn').forEach(btn => {
+        btn.addEventListener('click', () => {
+            const cid = btn.getAttribute('data-cid');
+            removeConsumerInstance(cid);
+        });
+    });
+
+    // Seek buttons & Enter key
+    document.querySelectorAll('.part-seek-btn').forEach(btn => {
+        btn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            e.preventDefault();
+            const cid = btn.getAttribute('data-cid');
+            const part = parseInt(btn.getAttribute('data-part'));
+            const input = document.getElementById(`seek-${cid}-${part}`);
+            if (input) {
+                const val = parseInt(input.value);
+                seekConsumerPartition(cid, part, isNaN(val) ? 0 : val);
+            }
+        });
+    });
+
+    document.querySelectorAll('.part-seek-input').forEach(input => {
+        input.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') {
+                e.preventDefault();
+                e.stopPropagation();
+                const cid = input.getAttribute('data-cid');
+                const part = parseInt(input.getAttribute('data-part'));
+                const val = parseInt(input.value);
+                seekConsumerPartition(cid, part, isNaN(val) ? 0 : val);
+            }
+        });
+    });
+
+    // Manual partition checkboxes
+    document.querySelectorAll('.manual-part-chk').forEach(chk => {
+        chk.addEventListener('change', () => {
+            const cid = chk.getAttribute('data-cid');
+            const part = parseInt(chk.getAttribute('data-part'));
+            const group = getOrCreateGroup(appState.activeGroupId);
+            const consumer = group.consumers.find(c => c.id === cid);
+            if (consumer) {
+                if (!consumer.manualPartitions) consumer.manualPartitions = [];
+                if (chk.checked) {
+                    // In Kafka, a partition belongs exclusively to at most 1 consumer instance in a group!
+                    // Disassociate this partition from any other consumer in the group if claimed
+                    group.consumers.forEach(other => {
+                        if (other.id !== cid && other.manualPartitions) {
+                            other.manualPartitions = other.manualPartitions.filter(p => p !== part);
+                            other.assignedPartitions = (other.assignedPartitions || []).filter(p => p !== part);
+                        }
+                    });
+                    if (!consumer.manualPartitions.includes(part)) {
+                        consumer.manualPartitions.push(part);
+                    }
+                } else {
+                    consumer.manualPartitions = consumer.manualPartitions.filter(p => p !== part);
+                }
+                rebalanceAndRenderConsumers();
+            }
+        });
+    });
+
+    // Clear feed buttons
+    document.querySelectorAll('.clear-instance-feed-btn').forEach(btn => {
+        btn.addEventListener('click', () => {
+            const cid = btn.getAttribute('data-cid');
+            const group = getOrCreateGroup(appState.activeGroupId);
+            const consumer = group.consumers.find(c => c.id === cid);
+            if (consumer) {
+                consumer.polledRecords = [];
+                rebalanceAndRenderConsumers();
+            }
+        });
+    });
+}
+
+async function pollConsumerInstance(consumerId, maxTotal = 10) {
+    const groupId = appState.activeGroupId;
+    const group = getOrCreateGroup(groupId);
+    const consumer = group.consumers.find(c => c.id === consumerId);
+    if (!consumer || !consumer.assignedPartitions || consumer.assignedPartitions.length === 0) return;
+
+    const topic = appState.selectedTopic;
+    let remainingBudget = maxTotal;
+
+    for (const part of consumer.assignedPartitions) {
+        if (remainingBudget <= 0) break;
+
+        let offset = consumer.offsets[part];
+        if (offset === undefined) {
+            // Fetch committed offset from broker
+            try {
+                const cRes = await fetch(`${API_BASE}/api/commit?groupId=${encodeURIComponent(groupId)}&topic=${encodeURIComponent(topic)}`);
+                const cData = await cRes.json();
+                offset = (cData.offsets && cData.offsets[part] !== undefined && cData.offsets[part] >= 0) ? cData.offsets[part] : 0;
+            } catch (e) {
+                offset = 0;
+            }
+            consumer.offsets[part] = offset;
+        }
+
+        try {
+            const fetchLimit = remainingBudget;
+            const res = await fetch(`${API_BASE}/api/consume?topic=${encodeURIComponent(topic)}&partition=${part}&offset=${offset}&limit=${fetchLimit}`);
+            const data = await res.json();
+            if (data.messages && data.messages.length > 0) {
+                data.messages.forEach(m => {
+                    consumer.polledRecords.unshift({ ...m, partition: part });
+                });
+                consumer.offsets[part] = data.nextOffset;
+                remainingBudget -= data.messages.length;
+
+                // Automatic offset commit directly to broker storage (__consumer_offsets.dat)
+                try {
+                    await fetch(`${API_BASE}/api/commit`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ groupId, topic, partition: part, offset: data.nextOffset })
+                    });
+                } catch (commitErr) {
+                    console.error(`Auto-commit error for consumer ${consumerId} partition ${part}:`, commitErr);
+                }
+            }
+        } catch (e) {
+            console.error(`Poll error for consumer ${consumerId} partition ${part}:`, e);
+        }
+    }
+
+    rebalanceAndRenderConsumers();
+}
+
+async function pollAllConsumers() {
+    const group = getOrCreateGroup(appState.activeGroupId);
+    for (const c of group.consumers) {
+        await pollConsumerInstance(c.id, 10);
+    }
+}
+
+async function seekConsumerPartition(consumerId, partition, newOffset) {
+    const groupId = appState.activeGroupId;
+    const group = getOrCreateGroup(groupId);
+    const consumer = group.consumers.find(c => c.id === consumerId);
+    if (!consumer) return;
+
+    // Retrieve Partition metadata to check High Watermark
+    const topic = appState.selectedTopic;
+    const topicMeta = (appState.topics || []).find(t => t.topic === topic);
+    const partMeta = topicMeta && topicMeta.partitions ? topicMeta.partitions.find(p => p.partition === partition) : null;
+    const hwm = partMeta ? (partMeta.highWatermark || 0) : 0;
+    const currentOffset = consumer.offsets[partition] !== undefined ? consumer.offsets[partition] : 0;
+
+    // Strictly enforce bounds: cannot seek less than 0 or greater than HWM
+    if (isNaN(newOffset) || newOffset < 0) {
+        openSeekModal('lower', partition, newOffset, hwm, currentOffset);
+        const input = document.getElementById(`seek-${consumerId}-${partition}`);
+        if (input) input.value = currentOffset;
+        return;
+    }
+
+    if (newOffset > hwm) {
+        openSeekModal('higher', partition, newOffset, hwm, currentOffset);
+        const input = document.getElementById(`seek-${consumerId}-${partition}`);
+        if (input) input.value = currentOffset;
+        return;
+    }
+
+    // Stop auto-poll if active so it does not immediately consume from new seek position
+    if (consumer.autoPollInterval) {
+        clearInterval(consumer.autoPollInterval);
+        consumer.autoPollInterval = null;
+    }
+
+    // 1. Set local in-memory consumer offset pointer
+    consumer.offsets[partition] = newOffset;
+
+    // 2. Automatically commit this offset to server storage (__consumer_offsets.dat)
+    try {
+        const cRes = await fetch(`${API_BASE}/api/commit`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ groupId, topic, partition, offset: newOffset })
+        });
+        const cData = await cRes.json();
+        if (!cRes.ok || cData.error) {
+            alert(`Seek commit error: ${cData.error || 'Unknown error'}`);
+            consumer.offsets[partition] = currentOffset;
+            rebalanceAndRenderConsumers();
+            return;
+        }
+    } catch (e) {
+        console.error("Auto-commit on seek failed:", e);
+    }
+
+    // 3. Immediately rebalance and re-render UI to update POS and recalculate LAG (strictly NO polling)
+    rebalanceAndRenderConsumers();
+
+    // 4. Visual confirmation on the SEEK button
+    const card = document.getElementById(`card-${consumerId}`);
+    if (card) {
+        const btn = card.querySelector(`.part-seek-btn[data-part="${partition}"]`);
+        if (btn) {
+            const orig = btn.textContent;
+            btn.textContent = 'SEEKED!';
+            btn.style.background = '#00F0FF';
+            btn.style.color = '#000';
+            setTimeout(() => {
+                btn.textContent = orig;
+                btn.style.background = '';
+                btn.style.color = '';
+            }, 800);
+        }
+    }
+}
+
+function openSeekModal(type, partition, attemptedOffset, hwm, currentOffset) {
+    const modal = document.getElementById('seekWarningModal');
+    if (!modal) return;
+
+    const title = document.getElementById('seekModalTitle');
+    const msg = document.getElementById('seekModalMessage');
+    const details = document.getElementById('seekModalDetails');
+
+    if (type === 'lower') {
+        if (title) title.innerHTML = `<span>⚠️</span> CANNOT SEEK BELOW 0`;
+        if (msg) msg.textContent = `Attempted seek to offset ${attemptedOffset} is invalid. Offsets cannot be negative.`;
+        if (details) {
+            details.innerHTML = `
+                <div><strong>Target:</strong> Partition ${partition}</div>
+                <div><strong>Attempted Offset:</strong> <span style="color:var(--color-pink); font-weight:bold;">${attemptedOffset}</span> (Below 0)</div>
+                <div><strong>Valid Offset Range:</strong> 0 to #${hwm} (High Watermark)</div>
+                <div><strong>Current Position:</strong> #${currentOffset}</div>
+                <div><strong>Status:</strong> Offset reverted to current position.</div>
+            `;
+        }
+    } else {
+        if (title) title.innerHTML = `<span>⚠️</span> SEEK EXCEEDS HIGH WATERMARK`;
+        if (msg) msg.textContent = `Attempted seek to offset #${attemptedOffset} exceeds the High Watermark (#${hwm}) on Partition ${partition}.`;
+        if (details) {
+            const overflow = attemptedOffset - hwm;
+            details.innerHTML = `
+                <div><strong>Target:</strong> Partition ${partition}</div>
+                <div><strong>Attempted Offset:</strong> <span style="color:var(--color-pink); font-weight:bold;">#${attemptedOffset}</span></div>
+                <div><strong>Partition High Watermark:</strong> #${hwm} (Latest committed message)</div>
+                <div><strong>Log Boundary Overflow:</strong> +${overflow} unwritten message(s)</div>
+                <div><strong>Valid Offset Range:</strong> 0 to #${hwm}</div>
+                <div><strong>Status:</strong> Offset reverted to current position.</div>
+            `;
+        }
+    }
+
+    modal.classList.remove('hidden');
+}
+
+function closeSeekModal() {
+    const modal = document.getElementById('seekWarningModal');
+    if (modal) modal.classList.add('hidden');
+}
+
+function toggleAutoPollConsumer(consumerId) {
+    const group = getOrCreateGroup(appState.activeGroupId);
+    const consumer = group.consumers.find(c => c.id === consumerId);
+    if (!consumer) return;
+
+    if (consumer.autoPollInterval) {
+        clearInterval(consumer.autoPollInterval);
+        consumer.autoPollInterval = null;
+    } else {
+        consumer.autoPollInterval = setInterval(() => {
+            pollConsumerInstance(consumerId, 5);
+        }, 1200);
+    }
+    rebalanceAndRenderConsumers();
+}
+
+function toggleAutoPollAll() {
+    const group = getOrCreateGroup(appState.activeGroupId);
+    const btn = document.getElementById('toggleAutoPollAllBtn');
+    const isAnyRunning = group.consumers.some(c => !!c.autoPollInterval);
+
+    if (isAnyRunning) {
+        group.consumers.forEach(c => {
+            if (c.autoPollInterval) {
+                clearInterval(c.autoPollInterval);
+                c.autoPollInterval = null;
+            }
+        });
+        if (btn) {
+            btn.textContent = 'AUTO: OFF';
+            btn.classList.remove('btn-lime');
+            btn.classList.add('btn-white');
+        }
+    } else {
+        group.consumers.forEach(c => {
+            c.autoPollInterval = setInterval(() => {
+                pollConsumerInstance(c.id, 5);
+            }, 1200);
+        });
+        if (btn) {
+            btn.textContent = 'AUTO: ON (1.2s)';
+            btn.classList.remove('btn-white');
+            btn.classList.add('btn-lime');
+        }
+    }
+    rebalanceAndRenderConsumers();
 }
 
 // ==========================================
@@ -799,9 +1523,13 @@ function renderPipeline() {
 }
 
 function updatePipelineDetail(step) {
+    if (!step) return;
     document.getElementById('detailStepNum').textContent = step.num;
     document.getElementById('detailStepTitle').textContent = step.title;
-    document.getElementById('detailStepDesc').textContent = step.desc;
+    
+    const descEl = document.getElementById('detailStepDesc');
+    if (descEl) descEl.textContent = step.desc || '';
+    
     document.getElementById('detailCodeFile').textContent = step.file;
     document.getElementById('detailCodeContent').textContent = step.code;
 }

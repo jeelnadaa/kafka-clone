@@ -16,6 +16,7 @@ import java.util.*;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 
 /**
  * Unified Broker Server.
@@ -32,6 +33,7 @@ public class BrokerServer implements Closeable {
     private final int maxSegmentBytes;
 
     private final AtomicBoolean running = new AtomicBoolean(false);
+    private final AtomicInteger serverRoundRobinSeq = new AtomicInteger(0);
     private ServerSocket serverSocket;
     private ExecutorService clientThreadPool;
     private TopicRegistry topicRegistry;
@@ -323,13 +325,26 @@ public class BrokerServer implements Closeable {
 
         String body = readRequestBody(exchange);
         String topic = extractJsonField(body, "topic");
-        int partition = extractJsonInt(body, "partition", 0);
         String key = extractJsonField(body, "key");
         String value = extractJsonField(body, "value");
 
         if (topic == null || topic.isEmpty()) {
             sendJsonResponse(exchange, 400, "{\"error\":\"Missing topic\"}");
             return;
+        }
+
+        int pCount = topicRegistry.getPartitionCount(topic);
+        if (pCount <= 0) pCount = defaultPartitions;
+
+        // Auto partition routing if partition is omitted, negative, or "auto"
+        int partition = extractJsonInt(body, "partition", -1);
+        String partStr = extractJsonField(body, "partition");
+        if (partition < 0 || "auto".equalsIgnoreCase(partStr) || (!body.contains("\"partition\""))) {
+            if (key != null && !key.trim().isEmpty()) {
+                partition = Math.abs(key.hashCode()) % pCount;
+            } else {
+                partition = Math.abs(serverRoundRobinSeq.getAndIncrement()) % pCount;
+            }
         }
 
         CommitLog log = topicRegistry.getPartitionLog(topic, partition);
@@ -377,10 +392,15 @@ public class BrokerServer implements Closeable {
         }
 
         List<Message> messages = log.read(offset, limit, 5 * 1024 * 1024);
+        long nextOffset = offset;
+        if (!messages.isEmpty()) {
+            nextOffset = messages.get(messages.size() - 1).getOffset() + 1;
+        }
         StringBuilder sb = new StringBuilder("{");
         sb.append("\"topic\":\"").append(escapeJson(topic)).append("\",");
         sb.append("\"partition\":").append(partition).append(",");
-        sb.append("\"nextOffset\":").append(log.getHighWatermark()).append(",");
+        sb.append("\"nextOffset\":").append(nextOffset).append(",");
+        sb.append("\"highWatermark\":").append(log.getHighWatermark()).append(",");
         sb.append("\"messages\":[");
         for (int i = 0; i < messages.size(); i++) {
             if (i > 0) sb.append(",");
@@ -404,6 +424,31 @@ public class BrokerServer implements Closeable {
             return;
         }
 
+        if ("GET".equalsIgnoreCase(exchange.getRequestMethod())) {
+            Map<String, String> params = parseQueryParams(exchange.getRequestURI().getQuery());
+            String groupId = params.get("groupId");
+            String topic = params.get("topic");
+
+            if (groupId == null || topic == null) {
+                sendJsonResponse(exchange, 400, "{\"error\":\"Missing groupId or topic parameter\"}");
+                return;
+            }
+
+            int pCount = topicRegistry.getPartitionCount(topic);
+            StringBuilder sb = new StringBuilder("{");
+            sb.append("\"groupId\":\"").append(escapeJson(groupId)).append("\",");
+            sb.append("\"topic\":\"").append(escapeJson(topic)).append("\",");
+            sb.append("\"offsets\":{");
+            for (int p = 0; p < pCount; p++) {
+                if (p > 0) sb.append(",");
+                long committed = topicRegistry.fetchCommittedOffset(groupId, topic, p);
+                sb.append("\"").append(p).append("\":").append(committed);
+            }
+            sb.append("}}");
+            sendJsonResponse(exchange, 200, sb.toString());
+            return;
+        }
+
         String body = readRequestBody(exchange);
         String groupId = extractJsonField(body, "groupId");
         String topic = extractJsonField(body, "topic");
@@ -413,6 +458,15 @@ public class BrokerServer implements Closeable {
         if (groupId == null || topic == null) {
             sendJsonResponse(exchange, 400, "{\"error\":\"Missing groupId or topic\"}");
             return;
+        }
+
+        storage.CommitLog pLog = topicRegistry.getPartitionLog(topic, partition);
+        if (pLog != null) {
+            long hwm = pLog.getHighWatermark();
+            if (offset < 0 || offset > hwm) {
+                sendJsonResponse(exchange, 400, "{\"error\":\"Seek offset " + offset + " is out of bounds (0.." + hwm + ")\"}");
+                return;
+            }
         }
 
         topicRegistry.commitOffset(groupId, topic, partition, offset);
@@ -595,11 +649,8 @@ public class BrokerServer implements Closeable {
     }
 
     private String readRequestBody(HttpExchange exchange) throws IOException {
-        try (BufferedReader br = new BufferedReader(new InputStreamReader(exchange.getRequestBody(), StandardCharsets.UTF_8))) {
-            StringBuilder sb = new StringBuilder();
-            String line;
-            while ((line = br.readLine()) != null) sb.append(line);
-            return sb.toString();
+        try (InputStream is = exchange.getRequestBody()) {
+            return new String(is.readAllBytes(), StandardCharsets.UTF_8);
         }
     }
 
@@ -617,9 +668,76 @@ public class BrokerServer implements Closeable {
 
     private String extractJsonField(String json, String field) {
         if (json == null) return null;
-        String pattern = "\"" + field + "\"\\s*:\\s*\"([^\"]*)\"";
-        java.util.regex.Matcher m = java.util.regex.Pattern.compile(pattern).matcher(json);
-        if (m.find()) return m.group(1);
+        String searchKey = "\"" + field + "\"";
+        int keyIdx = json.indexOf(searchKey);
+        if (keyIdx == -1) return null;
+        int colonIdx = json.indexOf(':', keyIdx + searchKey.length());
+        if (colonIdx == -1) return null;
+
+        // Skip whitespace after colon
+        int valStart = colonIdx + 1;
+        while (valStart < json.length() && Character.isWhitespace(json.charAt(valStart))) {
+            valStart++;
+        }
+        if (valStart >= json.length()) return null;
+
+        char firstChar = json.charAt(valStart);
+        if (firstChar == '"') {
+            // Quoted string: read until closing unescaped quote and unescape characters
+            StringBuilder sb = new StringBuilder();
+            boolean escape = false;
+            for (int i = valStart + 1; i < json.length(); i++) {
+                char c = json.charAt(i);
+                if (escape) {
+                    switch (c) {
+                        case 'n' -> sb.append('\n');
+                        case 'r' -> sb.append('\r');
+                        case 't' -> sb.append('\t');
+                        case '"' -> sb.append('"');
+                        case '\\' -> sb.append('\\');
+                        default -> sb.append(c);
+                    }
+                    escape = false;
+                } else if (c == '\\') {
+                    escape = true;
+                } else if (c == '"') {
+                    return sb.toString();
+                } else {
+                    sb.append(c);
+                }
+            }
+            return sb.toString();
+        } else if (firstChar == '{' || firstChar == '[') {
+            // Raw JSON object/array: extract by balancing delimiters
+            char open = firstChar;
+            char close = (open == '{') ? '}' : ']';
+            int depth = 0;
+            boolean inStr = false;
+            boolean esc = false;
+            for (int i = valStart; i < json.length(); i++) {
+                char c = json.charAt(i);
+                if (esc) {
+                    esc = false;
+                } else if (c == '\\') {
+                    esc = true;
+                } else if (c == '"') {
+                    inStr = !inStr;
+                } else if (!inStr) {
+                    if (c == open) depth++;
+                    else if (c == close) {
+                        depth--;
+                        if (depth == 0) return json.substring(valStart, i + 1);
+                    }
+                }
+            }
+        } else {
+            // Primitive (numbers, booleans, null)
+            int end = valStart;
+            while (end < json.length() && json.charAt(end) != ',' && json.charAt(end) != '}' && !Character.isWhitespace(json.charAt(end))) {
+                end++;
+            }
+            return json.substring(valStart, end);
+        }
         return null;
     }
 

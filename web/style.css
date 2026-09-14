@@ -921,6 +921,49 @@ label {
     line-height: 1.5;
 }
 
+.pipeline-explainer-box {
+    border: var(--border-w) solid var(--border-black);
+    padding: 14px 18px;
+    margin-bottom: 14px;
+    box-shadow: 4px 4px 0px #000;
+    transition: transform 0.1s ease;
+}
+
+.pipeline-explainer-box:hover {
+    transform: translate(-1px, -1px);
+    box-shadow: 5px 5px 0px #000;
+}
+
+.plain-english-box {
+    background: #F4FFEB;
+}
+
+.tech-box {
+    background: #EBF8FF;
+}
+
+.interview-box {
+    background: #FFFDF0;
+}
+
+.explainer-badge {
+    display: inline-block;
+    padding: 3px 8px;
+    font-size: 0.72rem;
+    font-weight: 900;
+    margin-bottom: 8px;
+    border: 2px solid #000;
+    box-shadow: 2px 2px 0px #000;
+}
+
+.explainer-text {
+    font-size: 0.95rem;
+    font-weight: 600;
+    line-height: 1.6;
+    margin: 0;
+    color: #18181B;
+}
+
 .code-preview-block {
     border: var(--border-w) solid var(--border-black);
     box-shadow: 4px 4px 0px #000;
@@ -1251,4 +1294,343 @@ label {
     border-left-width: 8px;
     box-shadow: 3px 3px 0px #000;
     font-weight: 600;
+}
+
+/* ==========================================================
+   MULTI-CONSUMER CLUSTER & ADVANCED PARTITIONING STYLES
+   ========================================================== */
+
+.consumer-group-toolbar {
+    margin-bottom: 16px;
+    border-bottom: 2px dashed #000;
+    padding-bottom: 16px;
+}
+
+.group-chips-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-top: 8px;
+    margin-bottom: 12px;
+    flex-wrap: wrap;
+}
+
+.group-chips-list {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    flex-wrap: wrap;
+}
+
+.group-chip-add {
+    background: #00F0FF;
+    border: 2px solid #000;
+    box-shadow: 2px 2px 0px #000;
+    padding: 3px 10px;
+    font-family: var(--font-mono);
+    font-size: 0.75rem;
+    font-weight: 800;
+    cursor: pointer;
+    transition: all 0.1s ease;
+}
+
+.group-chip-add:hover {
+    background: #FFE600;
+    transform: translate(1px, 1px);
+    box-shadow: 1px 1px 0px #000;
+}
+
+.readonly-input {
+    background: #F4F4F4 !important;
+    cursor: default !important;
+    font-weight: 800 !important;
+    color: #121212 !important;
+    user-select: all;
+}
+
+.text-xs {
+    font-size: 0.75rem;
+    font-weight: 800;
+    font-family: var(--font-mono);
+}
+
+.cluster-config-bar {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 12px;
+    background: #FFF;
+    border: 2px solid #000;
+    box-shadow: 3px 3px 0px #000;
+    padding: 10px 14px;
+    margin-top: 10px;
+    flex-wrap: wrap;
+}
+
+.strategy-selector {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+}
+
+.btn-group-sm {
+    display: inline-flex;
+    gap: 4px;
+}
+
+.btn-xs {
+    padding: 4px 8px;
+    font-size: 0.72rem;
+    font-weight: 800;
+    border: 2px solid #000;
+    box-shadow: 2px 2px 0px #000;
+    cursor: pointer;
+    font-family: var(--font-mono);
+    text-transform: uppercase;
+}
+
+.btn-xs.active {
+    background: var(--color-yellow) !important;
+    transform: translate(1px, 1px);
+    box-shadow: 1px 1px 0px #000;
+}
+
+.cluster-actions {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-wrap: wrap;
+}
+
+.consumer-instances-list {
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+    max-height: 580px;
+    overflow-y: auto;
+    padding-right: 4px;
+}
+
+.consumer-instance-card {
+    background: #FFF;
+    border: 3px solid #000;
+    box-shadow: 4px 4px 0px #000;
+    padding: 14px;
+    transition: transform 0.1s ease;
+}
+
+.consumer-instance-card:hover {
+    box-shadow: 5px 5px 0px #000;
+}
+
+.consumer-card-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 10px;
+    flex-wrap: wrap;
+}
+
+.consumer-identity {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.consumer-status-dot {
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    background: #00E676;
+    border: 1.5px solid #000;
+    display: inline-block;
+}
+
+.consumer-status-dot.idle {
+    background: #FFD600;
+}
+
+.consumer-name {
+    font-weight: 800;
+    font-family: var(--font-mono);
+    font-size: 0.95rem;
+}
+
+.consumer-card-actions {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-wrap: wrap;
+}
+
+.assigned-partitions-bar {
+    background: #F8F9FA;
+    border: 2px solid #000;
+    padding: 8px 12px;
+    margin-bottom: 10px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    flex-wrap: wrap;
+}
+
+.partition-assignment-chips {
+    display: flex;
+    gap: 6px;
+    flex-wrap: wrap;
+}
+
+.part-chk-label {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    font-family: var(--font-mono);
+    font-size: 0.75rem;
+    font-weight: 800;
+    background: #FFF;
+    border: 1.5px solid #000;
+    padding: 2px 6px;
+    cursor: pointer;
+    transition: all 0.1s ease;
+    user-select: none;
+}
+
+.part-chk-label:hover:not(.disabled) {
+    background: #FFFDD0;
+}
+
+.part-chk-label.active-chk {
+    background: #FFE600;
+}
+
+.part-chk-label.disabled {
+    background: #E5E5E5;
+    color: #888;
+    border-color: #999;
+    border-style: dashed;
+    cursor: not-allowed;
+    opacity: 0.7;
+}
+
+.part-chk-label input {
+    cursor: pointer;
+}
+
+.part-chk-label.disabled input {
+    cursor: not-allowed;
+    pointer-events: none;
+}
+
+.part-chk-label .owner-tag {
+    font-size: 0.65rem;
+    background: #121212;
+    color: #FFF;
+    padding: 0 4px;
+    font-weight: 700;
+    border-radius: 2px;
+}
+
+.partition-lag-row {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    margin-bottom: 10px;
+}
+
+.part-lag-item {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    background: #FFFEEA;
+    border: 1.5px solid #000;
+    padding: 4px 8px;
+    font-family: var(--font-mono);
+    font-size: 0.78rem;
+    font-weight: 700;
+    flex-wrap: wrap;
+    gap: 6px;
+}
+
+.part-lag-item .lag-badge {
+    background: #000;
+    color: #FFF;
+    padding: 1px 6px;
+    font-size: 0.7rem;
+    border-radius: 2px;
+}
+
+.part-lag-item .lag-badge.has-lag {
+    background: #FF0055;
+    color: #FFF;
+}
+
+.part-seek-box {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+}
+
+.part-seek-input {
+    width: 55px;
+    padding: 2px 4px;
+    border: 1.5px solid #000;
+    font-family: var(--font-mono);
+    font-size: 0.75rem;
+    font-weight: 800;
+}
+
+.instance-feed-container {
+    background: #F5F5F5;
+    border: 2px solid #000;
+    padding: 8px 10px;
+}
+
+.instance-records-list {
+    max-height: 180px;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    margin-top: 6px;
+}
+
+.instance-record-item {
+    background: #FFF;
+    border: 1.5px solid #000;
+    padding: 6px 8px;
+    font-family: var(--font-mono);
+    font-size: 0.78rem;
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    gap: 8px;
+}
+
+.record-content-box {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    flex: 1;
+    min-width: 0;
+}
+
+.record-header-meta {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.record-val {
+    white-space: pre-wrap;
+    word-break: break-word;
+    font-size: 0.74rem;
+    background: #FAFAFA;
+    border: 1px solid #E0E0E0;
+    padding: 3px 6px;
+    border-radius: 2px;
+    max-height: 90px;
+    overflow-y: auto;
 }

@@ -100,6 +100,7 @@
                             <div class="form-group">
                                 <label for="prodPartitionSelect">PARTITION</label>
                                 <select id="prodPartitionSelect" class="form-input">
+                                    <option value="auto">✨ Auto (Key Hash / Round-Robin)</option>
                                     <option value="0">Partition 0</option>
                                     <option value="1">Partition 1</option>
                                     <option value="2">Partition 2</option>
@@ -114,14 +115,15 @@
 
                         <div class="form-group">
                             <div class="label-with-actions">
-                                <label for="prodValueInput">PAYLOAD VALUE (TEXT OR JSON)</label>
+                                <label for="prodValueInput">PAYLOAD VALUE (ANY FORMAT: TEXT, JSON, CSV)</label>
                                 <div class="template-chips">
+                                    <button type="button" class="chip" data-tpl="text">Plain Text</button>
                                     <button type="button" class="chip" data-tpl="order">Order JSON</button>
                                     <button type="button" class="chip" data-tpl="user">User Event</button>
                                     <button type="button" class="chip" data-tpl="payment">Payment</button>
                                 </div>
                             </div>
-                            <textarea id="prodValueInput" class="form-input code-input" rows="4" placeholder="Type message payload..."></textarea>
+                            <textarea id="prodValueInput" class="form-input code-input" rows="4" placeholder="Type any message payload (plain text, JSON, CSV, etc.)..."></textarea>
                         </div>
 
                         <button type="submit" class="btn btn-block btn-yellow" id="produceSubmitBtn">
@@ -144,62 +146,63 @@
                     </div>
                 </div>
 
-                <!-- CONSUMER PANEL -->
+                <!-- CONSUMER PANEL (MULTI-CONSUMER GROUP CLUSTER) -->
                 <div class="panel pink-panel">
                     <div class="panel-header">
                         <div class="panel-title">
-                            <span class="pill-badge pill-black">CONSUMER</span>
+                            <span class="pill-badge pill-black">CONSUMER CLUSTER</span>
                             <h2>Consumer Group Playground</h2>
                         </div>
-                        <span class="pill-badge pill-white" id="consumerPosBadge">POS: 0</span>
+                        <div class="header-badges">
+                            <span class="pill-badge pill-white" id="consumerGroupCountBadge">1 CONSUMER</span>
+                            <span class="pill-badge pill-black" id="consumerPosBadge">GROUP: analytics-workers</span>
+                        </div>
                     </div>
 
-                    <div class="consumer-controls">
+                    <div class="consumer-group-toolbar">
                         <div class="form-row dual">
                             <div class="form-group">
-                                <label for="consGroupInput">GROUP ID</label>
-                                <input type="text" id="consGroupInput" class="form-input" value="analytics-workers">
+                                <label for="consGroupInput">ACTIVE CONSUMER GROUP</label>
+                                <div class="input-with-btn">
+                                    <input type="text" id="consGroupInput" class="form-input readonly-input" value="analytics-workers" readonly title="Active Consumer Group ID (switch using chips below or click + NEW GROUP)">
+                                    <button type="button" class="btn btn-sm btn-yellow" id="openCreateGroupModalBtn">+ NEW GROUP</button>
+                                </div>
                             </div>
                             <div class="form-group">
-                                <label for="consTopicSelect">TOPIC</label>
+                                <label for="consTopicSelect">TARGET TOPIC</label>
                                 <select id="consTopicSelect" class="form-input"></select>
                             </div>
                         </div>
 
-                        <div class="form-row dual">
-                            <div class="form-group">
-                                <label for="consPartSelect">PARTITION</label>
-                                <select id="consPartSelect" class="form-input">
-                                    <option value="0">Partition 0</option>
-                                    <option value="1">Partition 1</option>
-                                    <option value="2">Partition 2</option>
-                                </select>
-                            </div>
-                            <div class="form-group">
-                                <label for="consSeekInput">SEEK OFFSET</label>
-                                <div class="input-with-btn">
-                                    <input type="number" id="consSeekInput" class="form-input" value="0" min="0">
-                                    <button class="btn btn-sm btn-black" id="consSeekBtn">SEEK</button>
-                                </div>
+                        <div class="group-chips-row">
+                            <span class="dim text-xs">SWITCH GROUP:</span>
+                            <div id="groupChipsContainer" class="group-chips-list">
+                                <!-- Dynamically populated group chips -->
                             </div>
                         </div>
 
-                        <div class="action-btn-row">
-                            <button class="btn btn-cyan flex-1" id="pollMessagesBtn">POLL (NEXT 10)</button>
-                            <button class="btn btn-lime flex-1" id="commitOffsetBtn">COMMIT OFFSET</button>
-                            <button class="btn btn-white" id="toggleAutoPollBtn">AUTO: OFF</button>
+                        <!-- PARTITION ASSIGNMENT STRATEGY & CLUSTER CONTROLS -->
+                        <div class="cluster-config-bar">
+                            <div class="strategy-selector">
+                                <span class="strategy-label text-xs">ASSIGNMENT:</span>
+                                <div class="btn-group-sm">
+                                    <button type="button" class="btn btn-xs btn-white active" id="stratRangeBtn" title="Evenly divides contiguous partition ranges">AUTO RANGE</button>
+                                    <button type="button" class="btn btn-xs btn-white" id="stratRoundRobinBtn" title="Rotates partitions round-robin among consumers">ROUND ROBIN</button>
+                                    <button type="button" class="btn btn-xs btn-white" id="stratManualBtn" title="Manually assign partitions with checkboxes">MANUAL</button>
+                                </div>
+                            </div>
+
+                            <div class="cluster-actions">
+                                <button type="button" class="btn btn-sm btn-yellow" id="addConsumerInstanceBtn">+ ADD CONSUMER</button>
+                                <button type="button" class="btn btn-sm btn-cyan" id="pollAllConsumersBtn">POLL ALL</button>
+                                <button type="button" class="btn btn-sm btn-white" id="toggleAutoPollAllBtn">AUTO: OFF</button>
+                            </div>
                         </div>
                     </div>
 
-                    <!-- CONSUMED RECORDS LIST -->
-                    <div class="feed-container">
-                        <div class="feed-header">
-                            <span>POLL BUFFER (<span id="pollCount">0</span> RECORDS)</span>
-                            <button class="clean-link" id="clearPollBtn">Clear Buffer</button>
-                        </div>
-                        <div id="consumedRecordsList" class="records-stream">
-                            <div class="empty-state">No records polled yet. Click [POLL (NEXT 10)] above.</div>
-                        </div>
+                    <!-- CONSUMER INSTANCES CLUSTER CONTAINER -->
+                    <div id="consumerInstancesContainer" class="consumer-instances-list">
+                        <!-- Dynamically rendered consumer instance cards -->
                     </div>
                 </div>
             </div>
@@ -288,10 +291,9 @@
                         <h2>End-to-End Pipeline & Code Architecture</h2>
                     </div>
                     <div class="pipeline-tab-toggles">
-                        <button class="pill-toggle active" data-flow="produce">1. PRODUCE FLOW</button>
-                        <button class="pill-toggle" data-flow="storage">2. COMMIT LOG & INDEX</button>
-                        <button class="pill-toggle" data-flow="fetch">3. FETCH (CONSUME) FLOW</button>
-                        <button class="pill-toggle" data-flow="commit">4. OFFSET COMMIT FLOW</button>
+                        <button class="pill-toggle active" data-flow="producer">1. PRODUCER (HOW IT PRODUCES)</button>
+                        <button class="pill-toggle" data-flow="broker">2. BROKER (HOW IT SAVES)</button>
+                        <button class="pill-toggle" data-flow="consumer">3. CONSUMER (HOW IT CONSUMES)</button>
                     </div>
                 </div>
 
@@ -306,11 +308,14 @@
                 <div class="pipeline-detail-card" id="pipelineDetailCard">
                     <div class="detail-header">
                         <span class="pill-badge pill-yellow" id="detailStepNum">STEP 1</span>
-                        <h3 id="detailStepTitle">Producer Client Dispatches TCP Request</h3>
+                        <h3 id="detailStepTitle">Producer Routes & Packages Message</h3>
                     </div>
-                    <p id="detailStepDesc" class="detail-description">
-                        The client creates a Message payload, encapsulates it into a ProduceRequest with topic and partition, prefixes it with a 4-byte big-endian frame length, and writes to the TCP socket.
-                    </p>
+
+                    <div class="pipeline-explainer-box" style="background: #FFFDF8;">
+                        <div class="explainer-badge pill-black">EXPLANATION</div>
+                        <p id="detailStepDesc" class="explainer-text"></p>
+                    </div>
+
                     <div class="code-preview-block">
                         <div class="code-preview-header">
                             <span id="detailCodeFile">src/client/Producer.java</span>
@@ -416,6 +421,55 @@
                         <button type="submit" class="btn btn-yellow">CREATE TOPIC</button>
                     </div>
                 </form>
+            </div>
+        </div>
+
+        <!-- CREATE CONSUMER GROUP MODAL -->
+        <div id="createGroupModal" class="modal-overlay hidden">
+            <div class="modal-card">
+                <div class="modal-header">
+                    <h3>CREATE NEW CONSUMER GROUP</h3>
+                    <button class="close-modal-btn" id="closeGroupModalBtn">&times;</button>
+                </div>
+                <form id="createGroupForm">
+                    <div class="form-group">
+                        <label for="newGroupName">CONSUMER GROUP ID</label>
+                        <input type="text" id="newGroupName" class="form-input" placeholder="e.g. audit-service, billing-fleet" required autocomplete="off">
+                        <small>Consumer groups independently track read offsets in __consumer_offsets.dat.</small>
+                    </div>
+                    <div class="form-group">
+                        <label for="newGroupInstances">INITIAL CONSUMER INSTANCES</label>
+                        <input type="number" id="newGroupInstances" class="form-input" value="1" min="1" max="8">
+                        <small>Number of parallel consumers to spin up in this group.</small>
+                    </div>
+                    <div class="modal-actions">
+                        <button type="button" class="btn btn-white" id="cancelGroupModalBtn">CANCEL</button>
+                        <button type="submit" class="btn btn-yellow">CREATE & JOIN GROUP</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+
+        <!-- SEEK BOUNDS WARNING MODAL -->
+        <div id="seekWarningModal" class="modal-overlay hidden">
+            <div class="modal-card">
+                <div class="modal-header">
+                    <h3 id="seekModalTitle" style="color: var(--color-pink); display: flex; align-items: center; gap: 8px;">
+                        <span>⚠️</span> OUT OF BOUNDS SEEK
+                    </h3>
+                    <button type="button" class="close-modal-btn" id="closeSeekModalBtn">&times;</button>
+                </div>
+                <div class="modal-body" style="padding: 6px 0;">
+                    <p id="seekModalMessage" style="font-size: 1rem; font-weight: 700; line-height: 1.4; margin-bottom: 12px;"></p>
+                    <div id="seekModalDetails" class="mono" style="background: var(--bg-card, #FFFDF8); border: 2px solid #000; padding: 12px; font-size: 0.82rem; margin-bottom: 14px; box-shadow: 3px 3px 0px #000; line-height: 1.6;">
+                    </div>
+                    <div style="font-size: 0.78rem; border: 2px dashed #000; padding: 10px; background: #EBF8FF; margin-bottom: 8px;">
+                        💡 <strong>Kafka Invariant:</strong> In Apache Kafka, consumer seek operations are restricted to <code>[LogStartOffset .. HighWatermark]</code>. Seeking past High Watermark attempts to read uncommitted/non-existent records.
+                    </div>
+                </div>
+                <div class="modal-actions">
+                    <button type="button" class="btn btn-yellow" id="ackSeekModalBtn">UNDERSTOOD</button>
+                </div>
             </div>
         </div>
     </div>

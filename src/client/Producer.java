@@ -57,11 +57,19 @@ public class Producer implements Closeable {
         this.out = new BufferedOutputStream(socket.getOutputStream());
     }
 
+    private final AtomicInteger roundRobinCounter = new AtomicInteger(0);
+
     public synchronized RecordMetadata send(String topic, String key, String value) throws IOException {
-        // Automatic partition hashing based on key
-        int partition = 0;
-        if (key != null) {
-            partition = Math.abs(key.hashCode()) % 3; // Default 3 partitions
+        return send(topic, key, value, 3);
+    }
+
+    public synchronized RecordMetadata send(String topic, String key, String value, int totalPartitions) throws IOException {
+        int count = totalPartitions > 0 ? totalPartitions : 3;
+        int partition;
+        if (key != null && !key.trim().isEmpty()) {
+            partition = Math.abs(key.hashCode()) % count;
+        } else {
+            partition = Math.abs(roundRobinCounter.getAndIncrement()) % count;
         }
         return send(topic, partition, key, value);
     }
