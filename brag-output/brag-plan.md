@@ -54,6 +54,18 @@ Rebuilt Apache Kafka from scratch in pure Java with an append-only commit log, b
   - Consumer offset commit (switch / chip lay sound)
 - Restraint rule: Audio effects must not mask the voiceover clarity; keep SFX ducked or tucked cleanly between speech phrases.
 
+## On-Screen Narrator Captions (100% Voice-Synchronized)
+- Style: Neo-Brutalist floating pill at bottom center (`background: #000000`, `border: 4px solid #000000`, `box-shadow: 6px 6px 0px #FFE600`, elevated at `bottom: 54px`)
+- Badge: `[VOICE]` pill in `#FFE600` yellow with `#000000` text
+- Typography: 24px bold Space Grotesk with high-contrast color accents (`#70FF00` lime, `#00FFFF` cyan, `#FFE600` yellow)
+- Dynamic Animation: Synced phrase-by-phrase to exact spoken voice timestamps:
+  - **Phrase 1 (0.05s – 3.8s)**: "What if you rebuilt Apache Kafka with zero external dependencies?"
+  - **Phrase 2 (4.3s – 5.6s)**: "Meet Kafka Clone."
+  - **Phrase 3 (5.75s – 10.5s)**: "Messages frame over binary TCP, verify with CRC32,"
+  - **Phrase 4 (10.7s – 14.4s)**: "...and append directly to disk via NIO FileChannels."
+  - **Phrase 5 (14.7s – 17.2s)**: "Binary indexes deliver log-N lookups."
+  - **Phrase 6 (17.4s – 21.2s)**: "Zero bloat, pure Java, and a live Neo-Brutalist dashboard."
+
 ## Voiceover script
 ```text
 What happens when you rebuild Apache Kafka from first principles, with zero external dependencies?

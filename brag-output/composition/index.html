@@ -37,10 +37,75 @@
       0% { transform: translateX(0); }
       100% { transform: translateX(-50%); }
     }
+
+    /* Neo-Brutalist Narrator Caption Bar */
+    .caption-container {
+      position: absolute;
+      bottom: 54px;
+      left: 0;
+      width: 1920px;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      z-index: 200;
+      pointer-events: none;
+    }
+
+    .caption-pill {
+      position: absolute;
+      background: #000000;
+      color: #FFFFFF;
+      border: 4px solid #000000;
+      box-shadow: 6px 6px 0px #FFE600;
+      padding: 12px 28px;
+      display: flex;
+      align-items: center;
+      gap: 18px;
+      max-width: 1500px;
+      border-radius: 4px;
+      opacity: 0;
+      transform: translateY(15px);
+    }
+
+    .caption-tag {
+      background: #FFE600;
+      color: #000000;
+      font-family: 'JetBrains Mono', monospace;
+      font-weight: 900;
+      font-size: 16px;
+      padding: 6px 14px;
+      border: 2px solid #000000;
+      letter-spacing: 1px;
+      white-space: nowrap;
+    }
+
+    .caption-line {
+      font-family: 'Space Grotesk', sans-serif;
+      font-weight: 700;
+      font-size: 24px;
+      line-height: 1.3;
+      color: #FFFFFF;
+    }
+
+    .caption-hl {
+      color: #70FF00;
+      font-weight: 800;
+    }
+
+    .caption-hl-cyan {
+      color: #00FFFF;
+      font-weight: 800;
+    }
+
+    .caption-hl-yellow {
+      color: #FFE600;
+      font-weight: 800;
+    }
   </style>
+  <script src="https://cdn.jsdelivr.net/npm/gsap@3/dist/gsap.min.js"></script>
 </head>
 <body>
-  <div id="root" data-composition-id="root" data-no-timeline data-width="1920" data-height="1080" data-duration="21.4">
+  <div id="root" data-composition-id="root" data-width="1920" data-height="1080" data-duration="21.4">
 
     <!-- Top Ticker Marquee -->
     <div class="ticker-bar" data-layout-allow-overflow>
@@ -70,6 +135,76 @@
     <div id="scene-3-mount" data-composition-id="scene3" data-composition-src="compositions/scene3.html" data-start="10.5" data-duration="5.3"></div>
     <div id="scene-4-mount" data-composition-id="scene4" data-composition-src="compositions/scene4.html" data-start="15.8" data-duration="5.6"></div>
 
+    <!-- On-Screen Narrator Captions: Dynamic and 100% Voice-Synchronized -->
+    <div class="caption-container" id="caption-container">
+      <!-- Phrase 1: Voice speaks from 0.0s to 3.5s -->
+      <div class="caption-pill" id="cap-1">
+        <span class="caption-tag">VOICE</span>
+        <span class="caption-line">What if you rebuilt <span class="caption-hl-cyan">Apache Kafka</span> with <span class="caption-hl">zero external dependencies</span>?</span>
+      </div>
+
+      <!-- Phrase 2: Voice speaks from 4.4s to 5.4s -->
+      <div class="caption-pill" id="cap-2">
+        <span class="caption-tag">VOICE</span>
+        <span class="caption-line">Meet <span class="caption-hl-yellow">Kafka Clone</span>.</span>
+      </div>
+
+      <!-- Phrase 3: Voice speaks from 6.0s to 10.4s -->
+      <div class="caption-pill" id="cap-3">
+        <span class="caption-tag">VOICE</span>
+        <span class="caption-line">Messages frame over <span class="caption-hl-cyan">binary TCP</span>, verify with <span class="caption-hl">CRC32</span>,</span>
+      </div>
+
+      <!-- Phrase 4: Voice speaks from 10.8s to 14.2s -->
+      <div class="caption-pill" id="cap-4">
+        <span class="caption-tag">VOICE</span>
+        <span class="caption-line">...and append directly to disk via <span class="caption-hl-cyan">NIO FileChannels</span>.</span>
+      </div>
+
+      <!-- Phrase 5: Voice speaks from 14.8s to 17.1s -->
+      <div class="caption-pill" id="cap-5">
+        <span class="caption-tag">VOICE</span>
+        <span class="caption-line"><span class="caption-hl-yellow">Binary indexes</span> deliver <span class="caption-hl">log-N lookups</span>.</span>
+      </div>
+
+      <!-- Phrase 6: Voice speaks from 17.5s to 21.2s -->
+      <div class="caption-pill" id="cap-6">
+        <span class="caption-tag">VOICE</span>
+        <span class="caption-line"><span class="caption-hl">Zero bloat</span>, <span class="caption-hl-yellow">pure Java</span>, and a live <span class="caption-hl-cyan">Neo-Brutalist dashboard</span>.</span>
+      </div>
+    </div>
+
   </div>
+
+  <script>
+    const tl = gsap.timeline({ paused: true });
+
+    // Phrase 1 (Voice: 0.0s – 3.44s)
+    tl.fromTo("#cap-1", { opacity: 0, y: 15, scale: 0.95 }, { opacity: 1, y: 0, scale: 1, duration: 0.25, ease: "back.out(1.5)" }, 0.05);
+    tl.to("#cap-1", { opacity: 0, y: -10, duration: 0.2, ease: "power2.in" }, 3.8);
+
+    // Phrase 2 (Voice: 4.42s – 5.32s)
+    tl.fromTo("#cap-2", { opacity: 0, y: 15, scale: 0.95 }, { opacity: 1, y: 0, scale: 1, duration: 0.22, ease: "back.out(1.5)" }, 4.3);
+    tl.to("#cap-2", { opacity: 0, y: -10, duration: 0.18, ease: "power2.in" }, 5.6);
+
+    // Phrase 3 (Voice: 6.06s – 10.36s)
+    tl.fromTo("#cap-3", { opacity: 0, y: 15, scale: 0.95 }, { opacity: 1, y: 0, scale: 1, duration: 0.15, ease: "back.out(1.5)" }, 5.75);
+    tl.to("#cap-3", { opacity: 0, y: -10, duration: 0.2, ease: "power2.in" }, 10.5);
+
+    // Phrase 4 (Voice: 10.84s – 13.94s)
+    tl.fromTo("#cap-4", { opacity: 0, y: 15, scale: 0.95 }, { opacity: 1, y: 0, scale: 1, duration: 0.25, ease: "back.out(1.5)" }, 10.7);
+    tl.to("#cap-4", { opacity: 0, y: -10, duration: 0.2, ease: "power2.in" }, 14.4);
+
+    // Phrase 5 (Voice: 14.96s – 17.00s)
+    tl.fromTo("#cap-5", { opacity: 0, y: 15, scale: 0.95 }, { opacity: 1, y: 0, scale: 1, duration: 0.25, ease: "back.out(1.5)" }, 14.7);
+    tl.to("#cap-5", { opacity: 0, y: -10, duration: 0.2, ease: "power2.in" }, 17.2);
+
+    // Phrase 6 (Voice: 17.50s – 21.20s)
+    tl.fromTo("#cap-6", { opacity: 0, y: 15, scale: 0.95 }, { opacity: 1, y: 0, scale: 1, duration: 0.25, ease: "back.out(1.5)" }, 17.4);
+    tl.to("#cap-6", { opacity: 0, y: -10, duration: 0.25, ease: "power2.in" }, 21.2);
+
+    window.__timelines = window.__timelines || {};
+    window.__timelines["root"] = tl;
+  </script>
 </body>
 </html>
