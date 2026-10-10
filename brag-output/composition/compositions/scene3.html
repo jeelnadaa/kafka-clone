@@ -1,0 +1,185 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Scene 3 — Storage Engine</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Public+Sans:wght@700;800;900&family=Space+Grotesk:wght@500;700&family=JetBrains+Mono:wght@500;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="../shared.css">
+  <style>
+    .scene-wrap {
+      width: 1920px;
+      height: 1080px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      padding: 40px 80px;
+    }
+
+    .storage-header {
+      width: 1560px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 28px;
+    }
+
+    .storage-title-block h2 {
+      font-family: 'Public Sans', sans-serif;
+      font-weight: 900;
+      font-size: 38px;
+      letter-spacing: -1px;
+    }
+
+    .storage-path {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 18px;
+      font-weight: 700;
+    }
+
+    .storage-grid {
+      width: 1560px;
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 40px;
+      margin-bottom: 24px;
+    }
+
+    .file-card {
+      padding: 32px;
+      position: relative;
+    }
+
+    .file-card-yellow { background: #FFE600; }
+    .file-card-pink   { background: #FF70A6; }
+
+    .file-badge-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 18px;
+    }
+
+    .file-name {
+      font-family: 'JetBrains Mono', monospace;
+      font-weight: 900;
+      font-size: 26px;
+      margin-bottom: 8px;
+    }
+
+    .file-desc {
+      font-size: 18px;
+      font-weight: 700;
+      margin-bottom: 20px;
+    }
+
+    .code-entries {
+      background: #FFFFFF;
+      border: 3px solid #000000;
+      box-shadow: 5px 5px 0px #000000;
+      padding: 16px 20px;
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 16px;
+      line-height: 1.8;
+      font-weight: 700;
+    }
+
+    .code-highlight {
+      background: #70FF00;
+      padding: 2px 6px;
+      border: 1px solid #000000;
+    }
+
+    .storage-footer-card {
+      width: 1560px;
+      background: #FFFFFF;
+      border: 4px solid #000000;
+      box-shadow: 6px 6px 0px #000000;
+      padding: 20px 36px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+
+    .consumer-offsets-text {
+      font-family: 'JetBrains Mono', monospace;
+      font-weight: 800;
+      font-size: 20px;
+    }
+  </style>
+  <script src="https://cdn.jsdelivr.net/npm/gsap@3/dist/gsap.min.js"></script>
+</head>
+<body>
+  <div id="scene3-root" data-composition-id="scene3" data-width="1920" data-height="1080">
+    <div class="scene-wrap">
+      <div class="storage-header" id="s3-header">
+        <div class="storage-title-block">
+          <span class="badge badge-black" style="margin-bottom:8px;">STORAGE ENGINE INTERNALS</span>
+          <h2>Disk Log & Binary Index Inspector</h2>
+        </div>
+        <div class="storage-path badge badge-white">
+          DIR: ./kafka_data/orders/partition-0/
+        </div>
+      </div>
+
+      <div class="storage-grid" id="s3-grid">
+        <!-- Commit Log Card -->
+        <div class="file-card file-card-yellow brutal-card">
+          <div class="file-badge-row">
+            <span class="badge badge-black">COMMIT LOG</span>
+            <span class="badge badge-lime">WRITABLE</span>
+          </div>
+          <div class="file-name">00000000000000000000.log</div>
+          <div class="file-desc">Sequential disk appends via Java NIO FileChannel</div>
+          <div class="code-entries">
+            <div>[offset: 40 | pos: 3200 | len: 84B | crc32: 0x4B219E] OK</div>
+            <div>[offset: 41 | pos: 3284 | len: 92B | crc32: 0x91F03C] OK</div>
+            <div class="code-highlight">[offset: 42 | pos: 3376 | len: 88B | crc32: 0x8F3A21] ACTIVE</div>
+          </div>
+        </div>
+
+        <!-- Binary Offset Index Card -->
+        <div class="file-card file-card-pink brutal-card">
+          <div class="file-badge-row">
+            <span class="badge badge-black">BINARY INDEX</span>
+            <span class="badge badge-cyan">O(log N) LOOKUP</span>
+          </div>
+          <div class="file-name">00000000000000000000.index</div>
+          <div class="file-desc">Binary offset-to-physical-file-position sparse map</div>
+          <div class="code-entries">
+            <div>Offset:   0  &longrightarrow;  File Pos: 00000000 (Header)</div>
+            <div>Offset:  20  &longrightarrow;  File Pos: 00001640 (Floor Match)</div>
+            <div class="code-highlight">Offset:  42  &longrightarrow;  File Pos: 00003376 (Seek Target)</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="storage-footer-card brutal-card" id="s3-footer">
+        <div class="consumer-offsets-text">
+          __consumer_offsets.dat &bull; Group: analytics-workers &bull; Committed Offset: #42
+        </div>
+        <span class="badge badge-lime">CRASH RECOVERY: VERIFIED</span>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const tl = gsap.timeline({ paused: true });
+    tl.from("#s3-header", { y: -30, opacity: 0, duration: 0.4, ease: "power2.out" }, 0.1);
+    tl.from("#s3-grid", { y: 40, opacity: 0, duration: 0.5, ease: "power2.out" }, 0.3);
+    tl.from("#s3-footer", { scale: 0.95, opacity: 0, duration: 0.4, ease: "back.out(1.2)" }, 1.2);
+
+    tl.to(".scene-wrap", {
+      scale: 0.95,
+      opacity: 0,
+      duration: 0.35,
+      ease: "power2.in"
+    }, 4.9);
+
+    window.__timelines = window.__timelines || {};
+    window.__timelines["scene3"] = tl;
+  </script>
+</body>
+</html>

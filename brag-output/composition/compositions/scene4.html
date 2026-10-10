@@ -1,0 +1,182 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Scene 4 — Cluster Outro</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Public+Sans:wght@700;800;900&family=Space+Grotesk:wght@500;700&family=JetBrains+Mono:wght@500;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="../shared.css">
+  <style>
+    .scene-wrap {
+      width: 1920px;
+      height: 1080px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      padding: 40px 80px;
+    }
+
+    .outro-card {
+      width: 1400px;
+      background: #FFE600;
+      border: 5px solid #000000;
+      box-shadow: 12px 12px 0px #000000;
+      padding: 60px 80px;
+      text-align: center;
+      position: relative;
+    }
+
+    .cluster-status-pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 12px;
+      background: #FFFFFF;
+      border: 3px solid #000000;
+      box-shadow: 4px 4px 0px #000000;
+      padding: 10px 24px;
+      font-family: 'JetBrains Mono', monospace;
+      font-weight: 900;
+      font-size: 20px;
+      margin-bottom: 30px;
+    }
+
+    .status-pulse-dot {
+      width: 16px;
+      height: 16px;
+      background: #70FF00;
+      border: 2px solid #000000;
+      border-radius: 50%;
+    }
+
+    .brand-hero-title {
+      font-family: 'Public Sans', sans-serif;
+      font-weight: 900;
+      font-size: 96px;
+      line-height: 1;
+      letter-spacing: -3px;
+      margin-bottom: 16px;
+      text-transform: uppercase;
+      color: #000000;
+    }
+
+    .brand-hero-title span {
+      color: #B00040;
+    }
+
+    .brand-hero-sub {
+      font-size: 32px;
+      font-weight: 700;
+      margin-bottom: 40px;
+      color: #111111;
+    }
+
+    .metrics-row {
+      display: flex;
+      justify-content: center;
+      gap: 30px;
+      margin-bottom: 40px;
+    }
+
+    .metric-card {
+      background: #FFFFFF;
+      border: 3px solid #000000;
+      box-shadow: 5px 5px 0px #000000;
+      padding: 16px 28px;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      min-width: 220px;
+    }
+
+    .metric-label {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 16px;
+      font-weight: 800;
+      color: #555555;
+    }
+
+    .metric-val {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 32px;
+      font-weight: 900;
+      color: #000000;
+    }
+
+    .outro-pills {
+      display: flex;
+      justify-content: center;
+      gap: 20px;
+    }
+
+    .outro-pills .badge {
+      font-size: 22px;
+      padding: 12px 28px;
+    }
+  </style>
+  <script src="https://cdn.jsdelivr.net/npm/gsap@3/dist/gsap.min.js"></script>
+</head>
+<body>
+  <div id="scene4-root" data-composition-id="scene4" data-width="1920" data-height="1080">
+    <div class="scene-wrap">
+      <div class="outro-card brutal-card" id="s4-card">
+        <div class="cluster-status-pill">
+          <span class="status-pulse-dot"></span>
+          <span>CLUSTER STATUS: BROKER ONLINE (9092 / 8080)</span>
+        </div>
+
+        <h1 class="brand-hero-title">KAFKA CLONE<span>.</span></h1>
+        <p class="brand-hero-sub">Append-Only Distributed Message Broker & Storage Engine</p>
+
+        <div class="metrics-row">
+          <div class="metric-card">
+            <span class="metric-label">TCP PORT</span>
+            <span class="metric-val">9092</span>
+          </div>
+          <div class="metric-card">
+            <span class="metric-label">HTTP DASHBOARD</span>
+            <span class="metric-val">8080</span>
+          </div>
+          <div class="metric-card">
+            <span class="metric-label">TOTAL MSGS</span>
+            <span class="metric-val" style="background:#FFE600;">1,420</span>
+          </div>
+          <div class="metric-card">
+            <span class="metric-label">CRASH SAFE</span>
+            <span class="metric-val">100%</span>
+          </div>
+        </div>
+
+        <div class="outro-pills">
+          <span class="badge badge-black">PURE JAVA</span>
+          <span class="badge badge-cyan">ZERO DEPENDENCIES</span>
+          <span class="badge badge-lime">NEO-BRUTALIST STUDIO</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const tl = gsap.timeline({ paused: true });
+    tl.from("#s4-card", {
+      scale: 0.85,
+      y: 40,
+      opacity: 0,
+      duration: 0.6,
+      ease: "back.out(1.5)"
+    }, 0.1);
+
+    tl.from(".metric-card", {
+      scale: 0.8,
+      opacity: 0,
+      stagger: 0.15,
+      duration: 0.4,
+      ease: "back.out(1.4)"
+    }, 0.7);
+
+    window.__timelines = window.__timelines || {};
+    window.__timelines["scene4"] = tl;
+  </script>
+</body>
+</html>

@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Kafka Clone — Launch Brag</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Public+Sans:wght@700;800;900&family=Space+Grotesk:wght@500;700&family=JetBrains+Mono:wght@500;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="shared.css">
+  <style>
+    /* Top Ticker Marquee Banner */
+    .ticker-bar {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 1920px;
+      height: 52px;
+      background: #FFE600;
+      border-bottom: 4px solid #000000;
+      display: flex;
+      align-items: center;
+      overflow: hidden;
+      white-space: nowrap;
+      font-family: 'JetBrains Mono', monospace;
+      font-weight: 800;
+      font-size: 20px;
+      letter-spacing: 2px;
+      z-index: 100;
+    }
+
+    .ticker-text {
+      display: inline-block;
+      animation: marquee 16s linear infinite;
+    }
+
+    @keyframes marquee {
+      0% { transform: translateX(0); }
+      100% { transform: translateX(-50%); }
+    }
+  </style>
+</head>
+<body>
+  <div id="root" data-composition-id="root" data-no-timeline data-width="1920" data-height="1080" data-duration="21.4">
+
+    <!-- Top Ticker Marquee -->
+    <div class="ticker-bar" data-layout-allow-overflow>
+      <div class="ticker-text" data-layout-allow-overflow>
+        ⚡ KAFKA CLONE // APPEND-ONLY COMMIT LOG // BINARY WIRE PROTOCOL // O(LOG N) INDEX LOOKUP // JAVA NIO FILECHANNEL // ZERO DEPENDENCIES // 100% RECOVERABLE &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; ⚡ KAFKA CLONE // APPEND-ONLY COMMIT LOG // BINARY WIRE PROTOCOL // O(LOG N) INDEX LOOKUP // JAVA NIO FILECHANNEL // ZERO DEPENDENCIES // 100% RECOVERABLE
+      </div>
+    </div>
+
+    <!-- Audio Elements -->
+    <!-- Voiceover Track (Track 3) -->
+    <audio id="vo" data-start="0" data-duration="21.4" data-track-index="3" data-volume="1" src="assets/voiceover.wav"></audio>
+
+    <!-- Upbeat Background Music (Track 10, ducked during speech, fade-out at end) -->
+    <audio id="bg-music" data-start="0" data-duration="21.4" data-track-index="10" data-volume="0.18" data-fade-out="1.0" src="assets/music/happy-beats-business-moves-vol-1-by-ende-dot-app.mp3"></audio>
+
+    <!-- Sound Effects -->
+    <audio id="sfx-badges" data-start="1.0" data-duration="0.12" data-track-index="11" data-volume="0.75" src="assets/sfx/interface/drop_001.ogg"></audio>
+    <audio id="sfx-click" data-start="6.5" data-duration="0.08" data-track-index="12" data-volume="0.85" src="assets/sfx/ui/mouseclick1.ogg"></audio>
+    <audio id="sfx-ack" data-start="7.2" data-duration="1.5" data-track-index="13" data-volume="0.85" src="assets/sfx/impact/impactBell_heavy_000.ogg"></audio>
+    <audio id="sfx-slide" data-start="10.8" data-duration="0.65" data-track-index="14" data-volume="0.8" src="assets/sfx/casino/card-slide-1.ogg"></audio>
+    <audio id="sfx-outro" data-start="16.0" data-duration="0.15" data-track-index="15" data-volume="0.8" src="assets/sfx/impact/impactSoft_medium_000.ogg"></audio>
+    <audio id="sfx-bell" data-start="19.5" data-duration="1.5" data-track-index="16" data-volume="0.8" src="assets/sfx/impact/impactBell_heavy_000.ogg"></audio>
+
+    <!-- Mounted Scene Sub-compositions -->
+    <div id="scene-1-mount" data-composition-id="scene1" data-composition-src="compositions/scene1.html" data-start="0" data-duration="4.2"></div>
+    <div id="scene-2-mount" data-composition-id="scene2" data-composition-src="compositions/scene2.html" data-start="4.2" data-duration="6.3"></div>
+    <div id="scene-3-mount" data-composition-id="scene3" data-composition-src="compositions/scene3.html" data-start="10.5" data-duration="5.3"></div>
+    <div id="scene-4-mount" data-composition-id="scene4" data-composition-src="compositions/scene4.html" data-start="15.8" data-duration="5.6"></div>
+
+  </div>
+</body>
+</html>

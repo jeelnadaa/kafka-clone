@@ -1,0 +1,110 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Scene 1 — The Hook</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Public+Sans:wght@700;800;900&family=Space+Grotesk:wght@500;700&family=JetBrains+Mono:wght@500;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="../shared.css">
+  <style>
+    .scene-wrap {
+      width: 1920px;
+      height: 1080px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      padding: 40px 80px;
+    }
+
+    .hook-card {
+      width: 1380px;
+      background: #FFFFFF;
+      padding: 60px 80px;
+      text-align: center;
+    }
+
+    .hook-pill-row {
+      display: flex;
+      justify-content: center;
+      gap: 16px;
+      margin-bottom: 28px;
+    }
+
+    .hook-title {
+      font-family: 'Public Sans', sans-serif;
+      font-weight: 900;
+      font-size: 78px;
+      line-height: 1.05;
+      letter-spacing: -2px;
+      margin-bottom: 24px;
+      color: #000000;
+      text-transform: uppercase;
+    }
+
+    .hook-subtitle {
+      font-size: 36px;
+      font-weight: 700;
+      color: #222222;
+      margin-bottom: 44px;
+    }
+
+    .hook-badges {
+      display: flex;
+      justify-content: center;
+      gap: 24px;
+    }
+
+    .hook-badges .badge {
+      font-size: 22px;
+      padding: 12px 28px;
+    }
+  </style>
+  <script src="https://cdn.jsdelivr.net/npm/gsap@3/dist/gsap.min.js"></script>
+</head>
+<body>
+  <div id="scene1-root" data-composition-id="scene1" data-width="1920" data-height="1080">
+    <div class="scene-wrap">
+      <div class="hook-card brutal-card" id="s1-card">
+        <div class="hook-pill-row">
+          <span class="badge badge-black">SYSTEMS ENGINEERING SHOWCASE</span>
+          <span class="badge badge-pink">PURE JAVA NIO</span>
+        </div>
+        <h1 class="hook-title">TIRED OF 400<br>DEPENDENCIES?</h1>
+        <p class="hook-subtitle">We rebuilt Apache Kafka from first principles.</p>
+        <div class="hook-badges">
+          <div class="badge badge-cyan" id="badge-1">⚡ RAW NIO CHANNEL</div>
+          <div class="badge badge-yellow" id="badge-2">📦 ZERO EXTERNAL LIBS</div>
+          <div class="badge badge-lime" id="badge-3">💾 BINARY COMMIT LOG</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const tl = gsap.timeline({ paused: true });
+    tl.from("#s1-card", {
+      scale: 0.88,
+      y: 40,
+      opacity: 0,
+      duration: 0.6,
+      ease: "back.out(1.4)"
+    }, 0.1);
+
+    tl.from("#badge-1", { scale: 0, opacity: 0, duration: 0.35, ease: "back.out(1.8)" }, 1.0);
+    tl.from("#badge-2", { scale: 0, opacity: 0, duration: 0.35, ease: "back.out(1.8)" }, 1.4);
+    tl.from("#badge-3", { scale: 0, opacity: 0, duration: 0.35, ease: "back.out(1.8)" }, 1.8);
+
+    tl.to("#s1-card", {
+      scale: 0.94,
+      opacity: 0,
+      duration: 0.35,
+      ease: "power2.in"
+    }, 3.8);
+
+    window.__timelines = window.__timelines || {};
+    window.__timelines["scene1"] = tl;
+  </script>
+</body>
+</html>

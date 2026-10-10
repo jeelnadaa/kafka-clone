@@ -1,0 +1,1 @@
+Tired of 400 dependencies? We rebuilt Apache Kafka from scratch in pure Java — append-only commit logs, binary offset indexing, zero external libraries, and a live Neo-Brutalist dashboard.
